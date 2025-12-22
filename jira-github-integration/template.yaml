@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 30
+    MemorySize: 256
+
+Resources:
+  JiraWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: jira_handler/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          GITHUB_OWNER: Nuwantha57
+          GITHUB_REPO: jira-sync-test
+          JIRA_BASE_URL: https://eyepax.atlassian.net
+          TARGET_LABEL: sync-to-github
+          SECRET_NAME: jira-github-integration
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: arn:aws:secretsmanager:*:*:secret:jira-github-integration*
+      Events:
+        JiraWebhook:
+          Type: Api
+          Properties:
+            Path: /webhook
+            Method: post

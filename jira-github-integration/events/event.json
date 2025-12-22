@@ -1,0 +1,3 @@
+{
+  "body": "{\"issue\":{\"key\":\"TEST-100\",\"fields\":{\"summary\":\"SAM Integration Test\",\"description\":\"Acceptance Criteria:\\n- Works\\n- Creates issue\",\"priority\":{\"name\":\"High\"},\"assignee\":{\"displayName\":\"Nuwantha\"},\"labels\":[\"sync-to-github\",\"backend\"]}}}"
+}
