@@ -4,11 +4,11 @@ Transform: AWS::Serverless-2016-10-31
 Globals:
   Function:
     Runtime: python3.13
-    Timeout: 30
+    Timeout: 60
     MemorySize: 256
 
 Resources:
-  JiraWebhookFunction:
+  JiraSyncFunction:
     Type: AWS::Serverless::Function
     Properties:
       CodeUri: jira_handler/
@@ -17,15 +17,44 @@ Resources:
         Variables:
           GITHUB_OWNER: Nuwantha57
           GITHUB_REPO: jira-sync-test
-          JIRA_BASE_URL: https://eyepax.atlassian.net
+          JIRA_BASE_URL: https://nuwanthapiumal57.atlassian.net
+          JIRA_PROJECT_KEY: TPFI
           TARGET_LABEL: sync-to-github
           SECRET_NAME: jira-github-integration
+          DYNAMODB_TABLE: !Ref SyncStateTable
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: arn:aws:secretsmanager:*:*:secret:jira-github-integration*
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SyncStateTable
       Events:
-        JiraWebhook:
-          Type: Api
+        ScheduledSync:
+          Type: Schedule
           Properties:
-            Path: /webhook
-            Method: post
+            Schedule: rate(30 minutes)
+            Description: Poll Jira every 30 minutes and sync to GitHub
+            Enabled: true
+
+  SyncStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: jira-github-sync-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jira_issue_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jira_issue_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+Outputs:
+  SyncFunctionArn:
+    Description: ARN of the Jira sync Lambda function
+    Value: !GetAtt JiraSyncFunction.Arn
+
+  SyncStateTableName:
+    Description: Name of the DynamoDB table tracking sync state
+    Value: !Ref SyncStateTable
