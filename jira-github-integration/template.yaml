@@ -8,6 +8,22 @@ Globals:
     MemorySize: 256
 
 Resources:
+  # DynamoDB Table for duplicate prevention
+  JiraGithubSyncTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: jira-github-sync-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jira_issue_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jira_issue_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
   JiraWebhookFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -20,9 +36,12 @@ Resources:
           JIRA_BASE_URL: https://nuwanthapiumal57.atlassian.net
           TARGET_LABEL: sync-to-github
           SECRET_NAME: jira-github-integration
+          DYNAMODB_TABLE: jira-github-sync-state
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: arn:aws:secretsmanager:*:*:secret:jira-github-integration*
+        - DynamoDBCrudPolicy:
+            TableName: !Ref JiraGithubSyncTable
       Events:
         JiraWebhook:
           Type: Api
