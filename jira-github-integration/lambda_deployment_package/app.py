@@ -246,12 +246,64 @@ def lambda_handler(event, context):
     
     title = fields.get("summary", "No title provided")
     description = fields.get("description") or "_No description provided_"
+    print(f"Description preview: {description[:200]}...")  # Log description preview
+    
     labels = fields.get("labels", [])
     priority_obj = fields.get("priority")
     priority = priority_obj.get("name") if priority_obj else "Medium"
 
     assignee = fields.get("assignee")
     assignee_name = assignee.get("displayName") if assignee else "Unassigned"
+    
+    # Debug: Log all available field keys to help identify the AC field
+    print(f"Available Jira fields: {list(fields.keys())}")
+    
+    # Debug: Log custom field values (first 100 chars) to identify AC field
+    print("\n--- Custom Field Values ---")
+    for field_key in sorted(fields.keys()):
+        if field_key.startswith('customfield_'):
+            field_value = fields.get(field_key)
+            if field_value and isinstance(field_value, str) and field_value.strip():
+                preview = field_value[:100].replace('\n', ' ')
+                print(f"{field_key}: {preview}...")
+    print("--- End Custom Fields ---\n")
+    
+    # Extract Acceptance Criteria (can be in different fields depending on Jira setup)
+    acceptance_criteria = None
+    
+    # First, check the known AC field for this Jira instance
+    if fields.get("customfield_10074"):
+        acceptance_criteria = fields.get("customfield_10074")
+        print(f"Found Acceptance Criteria in customfield_10074: {acceptance_criteria[:100]}...")
+    
+    # If not found, try common custom field patterns and names
+    if not acceptance_criteria:
+        for field_key in fields.keys():
+            field_value = fields.get(field_key)
+            field_key_lower = str(field_key).lower()
+            
+            # Check if field name or key contains 'acceptance' or 'criteria'
+            if ("acceptance" in field_key_lower or 
+                "criteria" in field_key_lower or
+                field_key in ["customfield_10000", "customfield_10001", "customfield_10002", 
+                             "customfield_10003", "customfield_10004", "customfield_10005",
+                             "customfield_10010", "customfield_10011", "customfield_10012",
+                             "customfield_10015", "customfield_10016", "customfield_10017",
+                             "customfield_10020", "customfield_10021", "customfield_10022",
+                             "customfield_10074"]):
+                if field_value and isinstance(field_value, str) and field_value.strip():
+                    acceptance_criteria = field_value
+                    print(f"Found Acceptance Criteria in field '{field_key}': {acceptance_criteria[:50]}...")
+                    break
+        
+        # Also check standard field names
+        if not acceptance_criteria:
+            acceptance_criteria = fields.get("Acceptance Criteria") or fields.get("acceptanceCriteria")
+    
+    if acceptance_criteria:
+        print(f"✓ Acceptance Criteria found: {len(acceptance_criteria)} characters")
+    else:
+        print("⚠ No Acceptance Criteria found in Jira issue")
 
     print(f"Labels: {labels}")
 
@@ -271,6 +323,11 @@ def lambda_handler(event, context):
     jira_base_url = os.environ["JIRA_BASE_URL"]
     jira_url = f"{jira_base_url}/browse/{jira_key}"
 
+    # Build acceptance criteria section if available
+    ac_section = ""
+    if acceptance_criteria:
+        ac_section = f"\n\n### Acceptance Criteria\n{acceptance_criteria}"
+
     github_body = f"""{description}
 
 ---
@@ -278,7 +335,7 @@ def lambda_handler(event, context):
 ### Jira Details
 - **Jira Issue**: [{jira_key}]({jira_url})
 - **Priority**: {priority}
-- **Assignee**: {assignee_name}
+- **Assignee**: {assignee_name}{ac_section}
 """
 
     github_labels = map_labels(labels)
