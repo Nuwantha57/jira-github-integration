@@ -1,0 +1,257 @@
+{
+  "info": {
+    "name": "Jira Webhook Signature Tests",
+    "description": "Demo collection for testing webhook signature validation - shows valid, invalid, and missing signatures",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "✅ Valid Signature",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "// Generate valid HMAC SHA-256 signature",
+              "const secret = pm.collectionVariables.get(\"webhook_secret\");",
+              "const payload = pm.request.body.raw;",
+              "",
+              "if (!secret) {",
+              "    console.error(\"ERROR: webhook_secret not set in collection variables\");",
+              "    throw new Error(\"Please set webhook_secret in collection variables\");",
+              "}",
+              "",
+              "// Create HMAC SHA-256 signature",
+              "const hash = CryptoJS.HmacSHA256(payload, secret);",
+              "const signature = \"sha256=\" + hash.toString(CryptoJS.enc.Hex);",
+              "",
+              "// Set the signature header",
+              "pm.request.headers.add({",
+              "    key: \"X-Hub-Signature\",",
+              "    value: signature",
+              "});",
+              "",
+              "console.log(\"✅ Generated valid signature:\", signature.substring(0, 30) + \"...\");",
+              "console.log(\"   Payload length:\", payload.length);",
+              "console.log(\"   Expected result: 200 OK\");"
+            ],
+            "type": "text/javascript"
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 200\", function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test(\"Valid signature accepted\", function () {",
+              "    pm.expect(pm.response.code).to.equal(200);",
+              "});",
+              "",
+              "console.log(\"✅ Test Result: Valid signature was accepted (200 OK)\");"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"issue\": {\n    \"key\": \"DEMO-001\",\n    \"fields\": {\n      \"summary\": \"Valid Signature Test\",\n      \"description\": \"Testing webhook with correct HMAC SHA-256 signature\",\n      \"labels\": [\"sync-to-github\", \"demo\", \"valid-test\"],\n      \"priority\": {\n        \"name\": \"High\"\n      }\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{webhook_url}}",
+          "host": [
+            "{{webhook_url}}"
+          ]
+        },
+        "description": "Tests webhook with a VALID signature generated using HMAC SHA-256.\n\nThe pre-request script automatically:\n1. Gets the webhook secret from collection variables\n2. Computes HMAC SHA-256 hash of the request body\n3. Adds the signature to X-Hub-Signature header\n\nExpected: 200 OK - Request is authenticated and accepted"
+      },
+      "response": []
+    },
+    {
+      "name": "❌ Invalid Signature",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 401 or 403\", function () {",
+              "    pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+              "});",
+              "",
+              "pm.test(\"Invalid signature rejected\", function () {",
+              "    pm.expect(pm.response.code).to.not.equal(200);",
+              "});",
+              "",
+              "console.log(\"❌ Test Result: Invalid signature was rejected (\" + pm.response.code + \")\");"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Hub-Signature",
+            "value": "sha256=INVALID_SIGNATURE_MALICIOUS_ATTEMPT_123456789abcdef",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"issue\": {\n    \"key\": \"DEMO-002\",\n    \"fields\": {\n      \"summary\": \"Invalid Signature Test\",\n      \"description\": \"Testing webhook with wrong signature - simulates attacker\",\n      \"labels\": [\"sync-to-github\", \"demo\", \"invalid-test\"]\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{webhook_url}}",
+          "host": [
+            "{{webhook_url}}"
+          ]
+        },
+        "description": "Tests webhook with an INVALID signature.\n\nThe X-Hub-Signature header contains a fake/wrong signature, simulating:\n- An attacker trying to send unauthorized requests\n- A tampered payload\n- Wrong secret being used\n\nExpected: 401 Unauthorized or 403 Forbidden - Request is rejected"
+      },
+      "response": []
+    },
+    {
+      "name": "❌ Missing Signature",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Status code is 401 or 403\", function () {",
+              "    pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+              "});",
+              "",
+              "pm.test(\"Request without signature rejected\", function () {",
+              "    pm.expect(pm.response.code).to.not.equal(200);",
+              "});",
+              "",
+              "console.log(\"❌ Test Result: Request without signature was rejected (\" + pm.response.code + \")\");"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"issue\": {\n    \"key\": \"DEMO-003\",\n    \"fields\": {\n      \"summary\": \"No Signature Test\",\n      \"description\": \"Testing webhook without signature header\",\n      \"labels\": [\"sync-to-github\", \"demo\", \"no-signature-test\"]\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{webhook_url}}",
+          "host": [
+            "{{webhook_url}}"
+          ]
+        },
+        "description": "Tests webhook WITHOUT any signature header.\n\nThe request has no X-Hub-Signature header, simulating:\n- An unauthorized request\n- A user who doesn't have the secret\n- A misconfigured webhook\n\nExpected: 401 Unauthorized or 403 Forbidden - Request is rejected"
+      },
+      "response": []
+    },
+    {
+      "name": "🔍 Tampered Payload Demo",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "exec": [
+              "// Generate signature for ORIGINAL payload",
+              "const secret = pm.collectionVariables.get(\"webhook_secret\");",
+              "const originalPayload = JSON.stringify({",
+              "    issue: {",
+              "        key: \"DEMO-004\",",
+              "        fields: {",
+              "            summary: \"Original Summary\",",
+              "            description: \"Original description\"",
+              "        }",
+              "    }",
+              "});",
+              "",
+              "// Compute signature for original",
+              "const hash = CryptoJS.HmacSHA256(originalPayload, secret);",
+              "const signature = \"sha256=\" + hash.toString(CryptoJS.enc.Hex);",
+              "",
+              "pm.request.headers.add({",
+              "    key: \"X-Hub-Signature\",",
+              "    value: signature",
+              "});",
+              "",
+              "console.log(\"🔍 Demo: Signature computed for ORIGINAL payload\");",
+              "console.log(\"   But body has MODIFIED content\");",
+              "console.log(\"   Signature:\", signature.substring(0, 30) + \"...\");",
+              "console.log(\"   Expected: Signature mismatch → 401/403\");"
+            ],
+            "type": "text/javascript"
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test(\"Tampered request rejected\", function () {",
+              "    pm.expect(pm.response.code).to.be.oneOf([401, 403]);",
+              "});",
+              "",
+              "console.log(\"🔍 Test Result: Tampered payload was detected and rejected\");"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"issue\": {\n    \"key\": \"DEMO-004\",\n    \"fields\": {\n      \"summary\": \"MODIFIED Summary - Payload was tampered!\",\n      \"description\": \"This payload was changed after signature was computed\"\n    }\n  }\n}"
+        },
+        "url": {
+          "raw": "{{webhook_url}}",
+          "host": [
+            "{{webhook_url}}"
+          ]
+        },
+        "description": "Advanced demo showing payload tampering detection.\n\nThe pre-request script:\n1. Computes signature for original payload\n2. But the body contains MODIFIED content\n3. Signature no longer matches actual payload\n\nThis demonstrates how HMAC ensures payload integrity:\n- Any change to payload invalidates the signature\n- Man-in-the-middle attacks are detected\n- Payload cannot be modified in transit\n\nExpected: 401/403 - Tampered request rejected"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "webhook_url",
+      "value": "https://YOUR-API-GATEWAY-URL.execute-api.us-east-1.amazonaws.com/Prod/webhook",
+      "type": "string"
+    },
+    {
+      "key": "webhook_secret",
+      "value": "your_webhook_secret_here",
+      "type": "string"
+    }
+  ]
+}
