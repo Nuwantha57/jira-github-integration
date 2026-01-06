@@ -19,10 +19,10 @@ This guide shows how to demonstrate valid and invalid webhook signatures using P
 
 Click on the collection → **Variables** tab:
 
-| Variable | Value | Example |
-|----------|-------|---------|
-| `webhook_url` | Your API Gateway URL | `https://abc123.execute-api.us-east-1.amazonaws.com/Prod/webhook` |
-| `webhook_secret` | Your secret from AWS | `my_super_secret_key_12345` |
+| Variable         | Value                | Example                                                           |
+| ---------------- | -------------------- | ----------------------------------------------------------------- |
+| `webhook_url`    | Your API Gateway URL | `https://abc123.execute-api.us-east-1.amazonaws.com/Prod/webhook` |
+| `webhook_secret` | Your secret from AWS | `my_super_secret_key_12345`                                       |
 
 **Get your values:**
 
@@ -79,8 +79,8 @@ const signature = "sha256=" + hash.toString(CryptoJS.enc.Hex);
 
 // Set header
 pm.request.headers.add({
-    key: "X-Hub-Signature",
-    value: signature
+  key: "X-Hub-Signature",
+  value: signature,
 });
 
 console.log("Generated signature:", signature.substring(0, 30) + "...");
@@ -230,8 +230,8 @@ console.log("Secret:", secret);
 console.log("Generated Signature:", signature);
 
 pm.request.headers.add({
-    key: "X-Hub-Signature",
-    value: signature
+  key: "X-Hub-Signature",
+  value: signature,
 });
 ```
 
@@ -257,6 +257,7 @@ pm.request.headers.add({
 ### Test Timing Attack Protection
 
 Explain that the code uses `hmac.compare_digest()` which:
+
 - Compares all characters in constant time
 - Prevents timing attacks
 - Security best practice
@@ -272,6 +273,7 @@ Explain that the code uses `hmac.compare_digest()` which:
 ### Always getting 401 even with valid signature
 
 **Check:**
+
 1. Secret matches AWS Secrets Manager value
 2. Payload in body matches exactly (no extra spaces)
 3. Content-Type is `application/json`
@@ -280,6 +282,7 @@ Explain that the code uses `hmac.compare_digest()` which:
 ### Pre-request script not running
 
 **Fix:**
+
 1. Ensure script is in "Pre-request Script" tab
 2. Check Postman Console for errors
 3. Make sure CryptoJS is available (built into Postman)
@@ -325,6 +328,7 @@ Invalid Request:
 ### Real-World Analogy
 
 "Like a wax seal on a letter:
+
 - Only someone with the seal can create valid mark
 - If letter is opened/changed, seal breaks
 - Recipient verifies seal before trusting content"
@@ -357,6 +361,7 @@ Invalid Request:
 ## Next Steps
 
 After demo:
+
 - Update secret regularly for security
 - Monitor CloudWatch for failed auth attempts
 - Add additional validation (IP whitelist, rate limiting)

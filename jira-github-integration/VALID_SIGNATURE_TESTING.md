@@ -24,6 +24,7 @@ This guide explains **step-by-step** how to generate and use valid HMAC SHA-256 
 ### What is a Webhook Signature?
 
 A webhook signature is a cryptographic hash that proves:
+
 1. The request came from someone who knows the secret
 2. The payload hasn't been tampered with
 
@@ -103,6 +104,7 @@ Write-Host "Webhook Secret: $webhookSecret"
 4. Copy the `webhook_secret` value
 
 **Example Secret Value**:
+
 ```json
 {
   "webhook_secret": "my_super_secret_key_12345"
@@ -120,6 +122,7 @@ aws cloudformation describe-stacks `
 ```
 
 **Example URL**:
+
 ```
 https://abc123xyz.execute-api.us-east-1.amazonaws.com/Prod/webhook
 ```
@@ -209,7 +212,7 @@ try {
         -Headers $headers `
         -Body $payload `
         -ErrorAction Stop
-    
+
     Write-Host "`n✅ SUCCESS!" -ForegroundColor Green
     Write-Host "Status Code: $($response.StatusCode)" -ForegroundColor Green
     Write-Host "Response: $($response.Content)" -ForegroundColor Gray
@@ -228,7 +231,7 @@ Save this as `test-valid-signature.ps1`:
 param(
     [Parameter(Mandatory=$true)]
     [string]$WebhookUrl,
-    
+
     [Parameter(Mandatory=$true)]
     [string]$WebhookSecret
 )
@@ -282,13 +285,13 @@ try {
         -ContentType "application/json" `
         -ErrorAction Stop
     $duration = ((Get-Date) - $startTime).TotalMilliseconds
-    
+
     Write-Host "`n✅ SUCCESS!" -ForegroundColor Green
     Write-Host "Status Code: $($response.StatusCode)" -ForegroundColor Green
     Write-Host "Duration: $([math]::Round($duration, 2)) ms" -ForegroundColor Gray
     Write-Host "`nResponse:" -ForegroundColor White
     Write-Host $response.Content -ForegroundColor Gray
-    
+
 } catch {
     $duration = ((Get-Date) - $startTime).TotalMilliseconds
     Write-Host "`n❌ FAILED!" -ForegroundColor Red
@@ -347,13 +350,13 @@ def generate_signature(payload_str, secret):
 
 def test_valid_signature(webhook_url, webhook_secret):
     """Send test request with valid signature"""
-    
+
     print("\n" + "="*60)
     print("TESTING WITH VALID SIGNATURE")
     print("="*60)
     print(f"URL: {webhook_url}")
     print()
-    
+
     # Prepare payload
     payload = {
         "issue": {
@@ -367,28 +370,28 @@ def test_valid_signature(webhook_url, webhook_secret):
             }
         }
     }
-    
+
     # Convert to JSON string (important: same format for signing)
     payload_str = json.dumps(payload, separators=(',', ':'))
-    
+
     print(f"Step 1: Payload prepared ✓")
     print(f"Payload size: {len(payload_str)} bytes")
-    
+
     # Generate signature
     signature = generate_signature(payload_str, webhook_secret)
-    
+
     print(f"Step 2: Signature generated ✓")
     print(f"Signature: {signature[:30]}...")
-    
+
     # Prepare headers
     headers = {
         "X-Hub-Signature": signature,
         "Content-Type": "application/json"
     }
-    
+
     # Send request
     print(f"Step 3: Sending request...")
-    
+
     try:
         response = requests.post(
             webhook_url,
@@ -396,19 +399,19 @@ def test_valid_signature(webhook_url, webhook_secret):
             headers=headers,
             timeout=30
         )
-        
+
         print(f"\n✅ SUCCESS!")
         print(f"Status Code: {response.status_code}")
         print(f"\nResponse:")
         print(response.text)
-        
+
         return True
-        
+
     except requests.exceptions.RequestException as e:
         print(f"\n❌ FAILED!")
         print(f"Error: {str(e)}")
         return False
-    
+
     finally:
         print("\n" + "="*60)
         print("TEST COMPLETE")
@@ -418,10 +421,10 @@ if __name__ == "__main__":
     if len(sys.argv) != 3:
         print("Usage: python test-valid-signature.py <webhook_url> <webhook_secret>")
         sys.exit(1)
-    
+
     webhook_url = sys.argv[1]
     webhook_secret = sys.argv[2]
-    
+
     success = test_valid_signature(webhook_url, webhook_secret)
     sys.exit(0 if success else 1)
 ```
@@ -460,6 +463,7 @@ $secret = (aws secretsmanager get-secret-value `
 ```
 
 This will run:
+
 - ❌ Test 1: No signature (should fail)
 - ❌ Test 2: Invalid signature (should fail)
 - ✅ **Test 3: Valid signature (should succeed)** ← This is what you need!
@@ -578,6 +582,7 @@ Write-Host "Secret: $secret"
 The payload must be **exactly the same** when computing the signature and sending the request.
 
 **Problem**:
+
 ```powershell
 # ❌ WRONG: Using -Depth parameter inconsistently
 $payload1 = $data | ConvertTo-Json -Depth 5
@@ -585,6 +590,7 @@ $payload2 = $data | ConvertTo-Json -Depth 10  # Different!
 ```
 
 **Solution**:
+
 ```powershell
 # ✅ CORRECT: Use same exact string
 $payload = $data | ConvertTo-Json -Depth 10
@@ -596,6 +602,7 @@ $payload = $data | ConvertTo-Json -Depth 10
 **Problem**: Different encoding between signature and body
 
 **Solution**:
+
 ```powershell
 # Always use UTF-8
 [Text.Encoding]::UTF8.GetBytes($payload)
@@ -606,6 +613,7 @@ $payload = $data | ConvertTo-Json -Depth 10
 **Problem**: JSON formatting adds/removes spaces
 
 **Solution**:
+
 ```powershell
 # Store payload as single string, use everywhere
 $payload = @{...} | ConvertTo-Json -Depth 10 -Compress
@@ -625,6 +633,7 @@ aws logs tail /aws/lambda/JiraWebhookFunction --since 5m --follow
 ```
 
 **Look for**:
+
 ```
 Invalid signature provided
 Expected: sha256=abc123...
@@ -634,6 +643,7 @@ Received: sha256=xyz789...
 **Debug Steps**:
 
 1. **Print what you're signing**:
+
 ```powershell
 Write-Host "Payload for signature:"
 Write-Host $payload
@@ -641,11 +651,13 @@ Write-Host "Payload length: $($payload.Length)"
 ```
 
 2. **Print the signature**:
+
 ```powershell
 Write-Host "Generated signature: $signature"
 ```
 
 3. **Verify Lambda uses same secret**:
+
 ```powershell
 # Check Lambda environment or Secrets Manager
 aws lambda get-function-configuration `
@@ -656,6 +668,7 @@ aws lambda get-function-configuration `
 ### Issue 3: Signature Format Wrong
 
 **Correct Format**:
+
 ```
 sha256=a1b2c3d4e5f6789012345678901234567890abcdef...
 ```
@@ -681,6 +694,7 @@ $signature = "sha256=$($signatureHex.ToLower())"
 **Problem**: You sign one payload but send different payload
 
 **Bad Example**:
+
 ```powershell
 # ❌ WRONG
 $payload1 = $data | ConvertTo-Json
@@ -691,6 +705,7 @@ Invoke-WebRequest -Body $payload2  # Signature won't match!
 ```
 
 **Good Example**:
+
 ```powershell
 # ✅ CORRECT
 $payload = $data | ConvertTo-Json -Depth 10
@@ -730,9 +745,9 @@ function Test-WebhookWithValidSignature {
         [string]$WebhookUrl,
         [string]$Secret
     )
-    
+
     Write-Host "Testing webhook with valid signature..." -ForegroundColor Cyan
-    
+
     # Create payload
     $payload = @{
         issue = @{
@@ -744,47 +759,47 @@ function Test-WebhookWithValidSignature {
             }
         }
     } | ConvertTo-Json -Depth 10
-    
+
     # Generate signature
     try {
         $hmac = New-Object System.Security.Cryptography.HMACSHA256
         $hmac.Key = [Text.Encoding]::UTF8.GetBytes($Secret)
         $hash = $hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))
         $signature = "sha256=" + [BitConverter]::ToString($hash).Replace("-", "").ToLower()
-        
+
         Write-Host "✓ Signature generated" -ForegroundColor Green
         Write-Host "  $($signature.Substring(0, 40))..." -ForegroundColor Gray
-        
+
     } catch {
         Write-Host "✗ Failed to generate signature: $($_.Exception.Message)" -ForegroundColor Red
         return $false
     }
-    
+
     # Send request
     try {
         $headers = @{
             "X-Hub-Signature" = $signature
             "Content-Type" = "application/json"
         }
-        
+
         $response = Invoke-WebRequest `
             -Uri $WebhookUrl `
             -Method POST `
             -Headers $headers `
             -Body $payload `
             -ErrorAction Stop
-        
+
         Write-Host "✓ Request successful" -ForegroundColor Green
         Write-Host "  Status: $($response.StatusCode)" -ForegroundColor Gray
         Write-Host "  Response: $($response.Content)" -ForegroundColor Gray
-        
+
         return $true
-        
+
     } catch {
         Write-Host "✗ Request failed" -ForegroundColor Red
         Write-Host "  Status: $($_.Exception.Response.StatusCode.value__)" -ForegroundColor Red
         Write-Host "  Error: $($_.Exception.Message)" -ForegroundColor Red
-        
+
         return $false
     }
 }
@@ -850,22 +865,26 @@ Write-Host "`n=== TEST COMPLETE ===" -ForegroundColor Cyan
 ### Quick Reference
 
 **To test with a valid signature, you need**:
+
 1. ✅ Webhook URL
 2. ✅ Webhook Secret (from Secrets Manager)
 3. ✅ Test Payload (JSON)
 
 **Steps**:
+
 1. Create payload as JSON string
 2. Generate HMAC SHA-256 hash of payload using secret
 3. Format as `sha256=<hex>`
 4. Send request with `X-Hub-Signature` header
 
 **PowerShell One-Liner**:
+
 ```powershell
 $payload='{"issue":{"key":"TEST-1","fields":{"summary":"Test","labels":["sync-to-github"]}}}'; $hmac=New-Object System.Security.Cryptography.HMACSHA256; $hmac.Key=[Text.Encoding]::UTF8.GetBytes("YOUR_SECRET"); $sig="sha256="+[BitConverter]::ToString($hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes($payload))).Replace("-","").ToLower(); Invoke-WebRequest -Uri "YOUR_URL" -Method POST -Headers @{"X-Hub-Signature"=$sig} -Body $payload -ContentType "application/json"
 ```
 
 **Or use the provided script**:
+
 ```powershell
 .\test-security.ps1 -WebhookUrl "YOUR_URL" -JiraSecret "YOUR_SECRET"
 ```
