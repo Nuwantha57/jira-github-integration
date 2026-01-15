@@ -48,3 +48,35 @@ Resources:
           Properties:
             Path: /webhook
             Method: post
+
+  GitHubWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: jira_handler/
+      Handler: github_webhook_handler.lambda_handler
+      Environment:
+        Variables:
+          JIRA_BASE_URL: https://nuwanthapiumal57.atlassian.net
+          SECRET_NAME: jira-github-integration
+          DYNAMODB_TABLE: jira-github-sync-state
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*
+        - DynamoDBCrudPolicy:
+            TableName: !Ref JiraGithubSyncTable
+      Events:
+        GitHubWebhook:
+          Type: Api
+          Properties:
+            Path: /github-webhook
+            Method: post
+
+Outputs:
+  JiraWebhookUrl:
+    Description: "API Gateway endpoint URL for Jira webhook"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook"
+  
+  GitHubWebhookUrl:
+    Description: "API Gateway endpoint URL for GitHub webhook"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/github-webhook"
+

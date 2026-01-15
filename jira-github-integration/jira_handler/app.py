@@ -141,23 +141,113 @@ def get_sync_item(jira_key):
 
 
 def add_comment_mapping(jira_key, jira_comment_id, github_comment_id):
-    """Store a mapping from a Jira comment id to a GitHub comment id under the Jira issue item."""
+    """Store bidirectional mapping between Jira and GitHub comments."""
     table_name = os.environ.get("DYNAMODB_TABLE", "jira-github-sync-state")
     table = dynamodb.Table(table_name)
     try:
-        # Use a map attribute `comments` with dynamic key for the jira_comment_id
-        update_expr = "SET comments.#cid = :gid"
-        expr_names = {"#cid": str(jira_comment_id)}
-        expr_vals = {":gid": str(github_comment_id)}
+        # Store both directions for easy lookup
+        # comments.jira_to_github: jira_comment_id -> github_comment_id
+        # comments.github_to_jira: github_comment_id -> jira_comment_id
+        update_expr = "SET comments.jira_to_github.#jid = :gid, comments.github_to_jira.#gid = :jid"
+        expr_names = {
+            "#jid": str(jira_comment_id),
+            "#gid": str(github_comment_id)
+        }
+        expr_vals = {
+            ":gid": str(github_comment_id),
+            ":jid": str(jira_comment_id)
+        }
         table.update_item(
             Key={"jira_issue_key": jira_key},
             UpdateExpression=update_expr,
             ExpressionAttributeNames=expr_names,
             ExpressionAttributeValues=expr_vals
         )
-        print(f"✓ Mapped Jira comment {jira_comment_id} -> GitHub comment {github_comment_id}")
+        print(f"✓ Mapped Jira comment {jira_comment_id} <-> GitHub comment {github_comment_id}")
     except ClientError as e:
         print(f"DynamoDB update_item error: {e}")
+
+
+def is_comment_already_synced(jira_key, jira_comment_id=None, github_comment_id=None):
+    """Check if a comment has already been synced to prevent duplicates."""
+    sync_item = get_sync_item(jira_key)
+    if not sync_item:
+        return False
+    
+    comments = sync_item.get("comments", {})
+    
+    # Check Jira -> GitHub direction
+    if jira_comment_id:
+        jira_to_github = comments.get("jira_to_github", {})
+        if str(jira_comment_id) in jira_to_github:
+            print(f"Comment already synced: Jira {jira_comment_id} -> GitHub {jira_to_github[str(jira_comment_id)]}")
+            return True
+    
+    # Check GitHub -> Jira direction
+    if github_comment_id:
+        github_to_jira = comments.get("github_to_jira", {})
+        if str(github_comment_id) in github_to_jira:
+            print(f"Comment already synced: GitHub {github_comment_id} -> Jira {github_to_jira[str(github_comment_id)]}")
+            return True
+    
+    return False
+
+
+def extract_sync_marker(comment_body, source="jira"):
+    """Extract sync marker from comment body to detect loops."""
+    import re
+    if source == "jira":
+        # GitHub -> Jira marker format: <!-- jira-sync: jira_comment_id=12345 -->
+        match = re.search(r'<!-- jira-sync: jira_comment_id=(\d+) -->', comment_body)
+        return match.group(1) if match else None
+    else:
+        # Jira -> GitHub marker format: [//]: # (jira-sync: github_comment_id=12345)
+        match = re.search(r'\[//\]: # \(jira-sync: github_comment_id=(\d+)\)', comment_body)
+        return match.group(1) if match else None
+
+
+def parse_jira_adf_to_text(adf_content):
+    """Convert Jira ADF (Atlassian Document Format) to plain text."""
+    if not adf_content:
+        return ""
+    
+    # If it's already a string, return it
+    if isinstance(adf_content, str):
+        return adf_content
+    
+    # If it's ADF format (dict with 'type' and 'content')
+    if isinstance(adf_content, dict):
+        text_parts = []
+        
+        def extract_text(node):
+            if isinstance(node, dict):
+                node_type = node.get("type")
+                
+                # Text node - extract the text
+                if node_type == "text":
+                    return node.get("text", "")
+                
+                # Nodes with content array
+                if "content" in node:
+                    return "".join(extract_text(child) for child in node["content"])
+                
+                # Mention node
+                if node_type == "mention":
+                    return f"@{node.get('attrs', {}).get('text', 'user')}"
+                
+                # Hard break
+                if node_type == "hardBreak":
+                    return "\n"
+                
+            elif isinstance(node, list):
+                return "".join(extract_text(item) for item in node)
+            
+            return ""
+        
+        result = extract_text(adf_content)
+        return result.strip()
+    
+    return str(adf_content)
 
 
 def post_github_comment(owner, repo, issue_number, body_text, token):
@@ -299,11 +389,27 @@ def lambda_handler(event, context):
     if body.get("comment"):
         comment = body.get("comment")
         jira_comment_id = str(comment.get("id"))
-        comment_body = comment.get("body", "") or ""
+        
+        # Extract comment body - Jira uses ADF (Atlassian Document Format)
+        comment_body_raw = comment.get("body", "") or ""
+        comment_body = parse_jira_adf_to_text(comment_body_raw)
+        
+        print(f"Processing Jira comment {jira_comment_id}")
+        print(f"Comment body preview: {comment_body[:100]}...")
 
         if not comment_body.strip():
             print("Empty Jira comment, skipping")
             return {"statusCode": 200, "body": json.dumps({"message": "Empty comment, skipping"})}
+
+        # Loop prevention: Check if comment contains GitHub sync marker
+        if "<!-- jira-sync:" in comment_body or "jira-sync: github_comment_id" in comment_body:
+            print(f"Loop prevention: Jira comment {jira_comment_id} contains sync marker, skipping")
+            return {"statusCode": 200, "body": json.dumps({"message": "Loop prevention - synced comment"})}
+
+        # Check if this comment has already been synced
+        if is_comment_already_synced(jira_key, jira_comment_id=jira_comment_id):
+            print(f"Comment {jira_comment_id} already synced, skipping")
+            return {"statusCode": 200, "body": json.dumps({"message": "Comment already synced"})}
 
         # Find GitHub issue mapping for this Jira issue
         sync_item = get_sync_item(jira_key)
@@ -327,8 +433,27 @@ def lambda_handler(event, context):
         jira_author = comment.get("author", {}).get("displayName") or comment.get("author", {}).get("name") or "Jira user"
         jira_base_url = os.environ.get("JIRA_BASE_URL", "")
         jira_url = f"{jira_base_url}/browse/{jira_key}"
+        comment_created = comment.get("created", "")
+        
+        # Format timestamp if available
+        timestamp_str = ""
+        if comment_created:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(comment_created.replace('Z', '+00:00'))
+                timestamp_str = f" at {dt.strftime('%Y-%m-%d %H:%M UTC')}"
+            except:
+                pass
+        
         marker = f"<!-- jira-sync: jira_comment_id={jira_comment_id} -->"
-        github_comment_body = f"**Jira comment by {jira_author}:**\n\n{comment_body}\n\n[View in Jira]({jira_url})\n\n{marker}"
+        github_comment_body = f"""### 💬 Comment from Jira
+**Author:** {jira_author}{timestamp_str}
+
+{comment_body}
+
+---
+*[View in Jira]({jira_url}?focusedCommentId={jira_comment_id})*
+{marker}"""
 
         # Post comment to GitHub
         try:
