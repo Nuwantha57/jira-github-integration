@@ -274,18 +274,32 @@ def post_github_comment(owner, repo, issue_number, body_text, token):
 def get_user_mapping():
     """
     Get user mapping from environment or use default mapping.
-    Format: JIRA_EMAIL:GITHUB_USERNAME,JIRA_EMAIL2:GITHUB_USERNAME2
+    Supports two formats:
+    1. Email-based: JIRA_EMAIL:GITHUB_USERNAME
+    2. AccountId-based: JIRA_ACCOUNTID:GITHUB_USERNAME
+    Format: mapping1,mapping2,mapping3
     """
     mapping_str = os.environ.get("USER_MAPPING", "")
-    user_map = {}
+    email_map = {}
+    accountid_map = {}
     
     if mapping_str:
         for pair in mapping_str.split(","):
             if ":" in pair:
-                jira_email, github_user = pair.strip().split(":", 1)
-                user_map[jira_email.lower()] = github_user.strip()
+                # Use rsplit to split from the right (last colon) to handle accountIds with colons
+                # e.g., "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e:NuwanthaPiumal"
+                jira_id, github_user = pair.strip().rsplit(":", 1)
+                jira_id = jira_id.strip()
+                github_user = github_user.strip()
+                
+                # Check if it's an accountId (contains ':' in the ID itself) or email
+                if "@" in jira_id:
+                    email_map[jira_id.lower()] = github_user
+                else:
+                    # Assume it's an accountId
+                    accountid_map[jira_id] = github_user
     
-    return user_map
+    return {"email": email_map, "accountid": accountid_map}
 
 
 def map_jira_user_to_github(jira_user_obj, user_mapping=None):
@@ -297,14 +311,25 @@ def map_jira_user_to_github(jira_user_obj, user_mapping=None):
         return None, "Unassigned"
     
     display_name = jira_user_obj.get("displayName") or jira_user_obj.get("name") or "Unknown User"
-    email = jira_user_obj.get("emailAddress", "").lower()
+    
+    if not user_mapping:
+        return None, display_name
+    
+    # Try to map using accountId first (most reliable in Jira Cloud)
     jira_account_id = jira_user_obj.get("accountId", "")
+    if jira_account_id and jira_account_id in user_mapping.get("accountid", {}):
+        github_user = user_mapping["accountid"][jira_account_id]
+        print(f"✓ Mapped via accountId: {jira_account_id} -> @{github_user}")
+        return github_user, display_name
     
-    # Try to map using email from user mapping
-    if user_mapping and email in user_mapping:
-        return user_mapping[email], display_name
+    # Fallback to email mapping (if available)
+    email = jira_user_obj.get("emailAddress", "").lower()
+    if email and email in user_mapping.get("email", {}):
+        github_user = user_mapping["email"][email]
+        print(f"✓ Mapped via email: {email} -> @{github_user}")
+        return github_user, display_name
     
-    # Return None if no mapping found (don't try to assign in GitHub)
+    # No mapping found
     return None, display_name
 
 
@@ -586,6 +611,12 @@ def lambda_handler(event, context):
     assignee = fields.get("assignee")
     user_mapping = get_user_mapping()
     github_assignee, assignee_name = map_jira_user_to_github(assignee, user_mapping)
+    
+    # Debug logging for assignee
+    print(f"Assignee object: {assignee}")
+    print(f"User mapping: {user_mapping}")
+    print(f"Mapped GitHub assignee: {github_assignee}")
+    print(f"Assignee name: {assignee_name}")
     
     # Debug: Log all available field keys to help identify the AC field
     print(f"Available Jira fields: {list(fields.keys())}")

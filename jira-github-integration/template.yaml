@@ -37,7 +37,7 @@ Resources:
           TARGET_LABEL: sync-to-github
           SECRET_NAME: jira-github-integration
           DYNAMODB_TABLE: jira-github-sync-state
-          USER_MAPPING: "nuwanthapiumal57@gmail.com:NuwanthaPiumal"  # Format: jira_email1@example.com:github_user1,jira_email2@example.com:github_user2
+          USER_MAPPING: "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e:NuwanthaPiumal"  # Format: jira_accountid:github_user OR jira_email:github_user (comma-separated)
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*
@@ -57,9 +57,12 @@ Resources:
       Handler: github_webhook_handler.lambda_handler
       Environment:
         Variables:
+          GITHUB_OWNER: Nuwantha57
+          GITHUB_REPO: jira-sync-test
           JIRA_BASE_URL: https://nuwanthapiumal57.atlassian.net
           SECRET_NAME: jira-github-integration
           DYNAMODB_TABLE: jira-github-sync-state
+          USER_MAPPING: "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e:NuwanthaPiumal"
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*
