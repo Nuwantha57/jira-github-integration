@@ -620,13 +620,128 @@ def lambda_handler(event, context):
             print(f"Error while syncing comment: {e}")
             return {"statusCode": 500, "body": json.dumps({"error": "Internal error"})}
     
-    # ---- Step 3a: Check if already synced (PREVENT DUPLICATES)
-    if is_already_synced(jira_key):
-        print(f"⊘ Skipping {jira_key} - already synced to GitHub")
+    # ---- Step 3a: Check if already synced (handle updates if synced)
+    sync_item = get_sync_item(jira_key)
+    if sync_item:
+        print(f"Issue {jira_key} already synced to GitHub - checking for updates")
+        
+        # Get webhook event type to determine if this is an update
+        webhook_event = body.get("webhookEvent", "")
+        changelog = body.get("changelog", {})
+        
+        # Check if description was updated
+        if changelog:
+            items = changelog.get("items", [])
+            description_updated = any(item.get("field") == "description" for item in items)
+            
+            if description_updated:
+                print(f"Description updated for {jira_key}, syncing to GitHub")
+                
+                # Get the updated description
+                title = fields.get("summary", "No title provided")
+                description = fields.get("description") or "_No description provided_"
+                
+                # Get GitHub issue number
+                github_issue_number = sync_item.get("github_issue_number")
+                if not github_issue_number and sync_item.get("github_issue_url"):
+                    try:
+                        github_issue_number = int(sync_item.get("github_issue_url").rstrip('/').split('/')[-1])
+                    except Exception:
+                        pass
+                
+                if github_issue_number:
+                    try:
+                        # Get GitHub credentials
+                        token = get_github_token()
+                        owner = os.environ["GITHUB_OWNER"]
+                        repo = os.environ["GITHUB_REPO"]
+                        
+                        # Get current GitHub issue to preserve the existing body structure
+                        url = f"https://api.github.com/repos/{owner}/{repo}/issues/{github_issue_number}"
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Accept": "application/vnd.github.v3+json",
+                            "User-Agent": "jira-github-integration"
+                        }
+                        resp = requests.get(url, headers=headers, timeout=30)
+                        
+                        if resp.status_code == 200:
+                            current_issue = resp.json()
+                            current_body = current_issue.get("body", "")
+                            
+                            # Rebuild the body with updated description
+                            jira_base_url = os.environ["JIRA_BASE_URL"]
+                            jira_url = f"{jira_base_url}/browse/{jira_key}"
+                            
+                            # Parse description if it's ADF format
+                            user_mapping = get_user_mapping()
+                            description_text = parse_jira_adf_to_text(description, user_mapping)
+                            
+                            # Extract existing sections to preserve them
+                            jira_details_section = ""
+                            acceptance_criteria_section = ""
+                            footer_section = ""
+                            
+                            # Extract Jira Details section (between Description and Acceptance Criteria or end)
+                            if "### 📌 Jira Details" in current_body:
+                                start_idx = current_body.index("### 📌 Jira Details")
+                                # Find where it ends (either at next ## heading or end)
+                                end_idx = len(current_body)
+                                if "## 🎯 Acceptance Criteria" in current_body[start_idx:]:
+                                    end_idx = start_idx + current_body[start_idx:].index("## 🎯 Acceptance Criteria")
+                                jira_details_section = current_body[start_idx:end_idx].rstrip()
+                            
+                            # Extract Acceptance Criteria section
+                            if "## 🎯 Acceptance Criteria" in current_body:
+                                start_idx = current_body.index("## 🎯 Acceptance Criteria")
+                                # Find where it ends (either at --- or end)
+                                end_idx = len(current_body)
+                                if "---\n*Synced from Jira:" in current_body[start_idx:]:
+                                    end_idx = start_idx + current_body[start_idx:].index("---\n*Synced from Jira:")
+                                acceptance_criteria_section = current_body[start_idx:end_idx].rstrip()
+                            
+                            # Extract footer
+                            if "---\n*Synced from Jira:" in current_body:
+                                footer_section = current_body[current_body.index("---\n*Synced from Jira:"):]
+                            
+                            # Rebuild body with updated description while preserving other sections
+                            new_body = f"""## 📋 Description
+{description_text}
+
+"""
+                            if jira_details_section:
+                                new_body += jira_details_section + "\n\n"
+                            
+                            if acceptance_criteria_section:
+                                new_body += acceptance_criteria_section + "\n\n"
+                            
+                            if footer_section:
+                                new_body += footer_section
+                            else:
+                                new_body += f"""---
+*Synced from Jira: [{jira_key}]({jira_url})*"""
+                            
+                            # Update GitHub issue
+                            update_data = {"body": new_body}
+                            resp = requests.patch(url, json=update_data, headers=headers, timeout=30)
+                            
+                            if resp.status_code == 200:
+                                print(f"✓ Updated GitHub issue #{github_issue_number} description")
+                                return {"statusCode": 200, "body": json.dumps({"message": "Description synced to GitHub"})}
+                            else:
+                                print(f"Failed to update GitHub issue: {resp.status_code} - {resp.text}")
+                        else:
+                            print(f"Failed to fetch GitHub issue: {resp.status_code}")
+                            
+                    except Exception as e:
+                        print(f"Error updating GitHub issue description: {e}")
+        
+        # No updates to sync, skip
+        print(f"⊘ No relevant updates for {jira_key}, skipping")
         return {
             "statusCode": 200,
             "body": json.dumps({
-                "message": "Already synced, skipping",
+                "message": "Already synced, no updates",
                 "jira_issue": jira_key
             })
         }
