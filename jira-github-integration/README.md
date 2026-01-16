@@ -1,28 +1,67 @@
-# jira-github-integration
+# Jira-GitHub Integration
 
-This project contains source code and supporting files for a serverless application that you can deploy with the SAM CLI. It includes the following files and folders.
+Bidirectional integration that syncs Jira issues and comments to GitHub issues and comments.
 
-- hello_world - Code for the application's Lambda function.
-- events - Invocation events that you can use to invoke the function.
-- tests - Unit tests for the application code. 
-- template.yaml - A template that defines the application's AWS resources.
+## Features
 
-The application uses several AWS resources, including Lambda functions and an API Gateway API. These resources are defined in the `template.yaml` file in this project. You can update the template to add AWS resources through the same deployment process that updates your application code.
+- ✅ Sync Jira issues to GitHub issues with the `sync-to-github` label
+- ✅ Bidirectional comment sync (Jira ↔ GitHub)
+- ✅ User mapping from Jira to GitHub
+- ✅ Loop prevention with sync markers
+- ✅ DynamoDB-based duplicate prevention
+- ✅ Acceptance Criteria support
+- ✅ Label mapping
+- ✅ ADF (Atlassian Document Format) parsing
 
-If you prefer to use an integrated development environment (IDE) to build and test your application, you can use the AWS Toolkit.  
-The AWS Toolkit is an open source plug-in for popular IDEs that uses the SAM CLI to build and deploy serverless applications on AWS. The AWS Toolkit also adds a simplified step-through debugging experience for Lambda function code. See the following links to get started.
+## Architecture
 
-* [CLion](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [GoLand](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [IntelliJ](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [WebStorm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [Rider](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [PhpStorm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [PyCharm](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [RubyMine](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [DataGrip](https://docs.aws.amazon.com/toolkit-for-jetbrains/latest/userguide/welcome.html)
-* [VS Code](https://docs.aws.amazon.com/toolkit-for-vscode/latest/userguide/welcome.html)
-* [Visual Studio](https://docs.aws.amazon.com/toolkit-for-visual-studio/latest/user-guide/welcome.html)
+- **JiraWebhookFunction**: Handles Jira webhooks for issue creation and comment sync to GitHub
+- **GitHubWebhookFunction**: Handles GitHub webhooks for comment sync to Jira  
+- **DynamoDB**: Stores sync state and comment mappings
+- **API Gateway**: Exposes webhook endpoints
+
+## User Mapping
+
+### Problem
+Jira users (Assignee, Commenter, Reporter) might not exist as GitHub contributors.
+
+### Solution
+The integration handles missing users gracefully:
+
+1. **User Mapping Configuration**: Map Jira email addresses to GitHub usernames via environment variable
+2. **Verification**: Checks if GitHub users exist and are repository collaborators before assignment
+3. **Fallback**: If no mapping or user doesn't exist, displays name only (no @mention/assignment)
+
+### Configuration
+
+Set the `USER_MAPPING` environment variable in [template.yaml](template.yaml):
+
+```yaml
+USER_MAPPING: "jira.user@example.com:githubuser1,another@example.com:githubuser2"
+```
+
+Format: `jira_email:github_username,jira_email2:github_username2`
+
+### Behavior
+
+**For Issue Assignment:**
+- ✅ Mapped + Exists: Issue assigned to `@githubuser` in GitHub
+- ⚠️ Mapped + Not Found: Shows "Assignee (Jira): Full Name" (no assignment)
+- ⚠️ Not Mapped: Shows "Assignee (Jira): Full Name" (no assignment)
+
+**For Comments:**
+- ✅ Mapped + Exists: "Author: @githubuser (Full Name)"
+- ⚠️ Mapped + Not Found: "Author: Full Name"
+- ⚠️ Not Mapped: "Author: Full Name"
+
+## Setup
+
+### Prerequisites
+
+- AWS SAM CLI
+- Python 3.13
+- GitHub Personal Access Token
+- Jira API Token
 
 ## Deploy the sample application
 

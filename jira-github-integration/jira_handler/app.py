@@ -269,6 +269,72 @@ def post_github_comment(owner, repo, issue_number, body_text, token):
 
 
 # -------------------------------
+# User mapping helpers
+# -------------------------------
+def get_user_mapping():
+    """
+    Get user mapping from environment or use default mapping.
+    Format: JIRA_EMAIL:GITHUB_USERNAME,JIRA_EMAIL2:GITHUB_USERNAME2
+    """
+    mapping_str = os.environ.get("USER_MAPPING", "")
+    user_map = {}
+    
+    if mapping_str:
+        for pair in mapping_str.split(","):
+            if ":" in pair:
+                jira_email, github_user = pair.strip().split(":", 1)
+                user_map[jira_email.lower()] = github_user.strip()
+    
+    return user_map
+
+
+def map_jira_user_to_github(jira_user_obj, user_mapping=None):
+    """
+    Map a Jira user to a GitHub username.
+    Returns tuple: (github_username or None, display_name)
+    """
+    if not jira_user_obj:
+        return None, "Unassigned"
+    
+    display_name = jira_user_obj.get("displayName") or jira_user_obj.get("name") or "Unknown User"
+    email = jira_user_obj.get("emailAddress", "").lower()
+    jira_account_id = jira_user_obj.get("accountId", "")
+    
+    # Try to map using email from user mapping
+    if user_mapping and email in user_mapping:
+        return user_mapping[email], display_name
+    
+    # Return None if no mapping found (don't try to assign in GitHub)
+    return None, display_name
+
+
+def verify_github_user_exists(username, token, owner, repo):
+    """
+    Verify if a GitHub user exists and has access to the repository.
+    Returns True if user exists and can be assigned, False otherwise.
+    """
+    if not username:
+        return False
+    
+    try:
+        # Check if user is a collaborator or contributor
+        url = f"https://api.github.com/repos/{owner}/{repo}/collaborators/{username}"
+        resp = requests.get(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json"
+            },
+            timeout=5
+        )
+        # 204 = user is a collaborator, 404 = not a collaborator
+        return resp.status_code == 204
+    except Exception as e:
+        print(f"Error verifying GitHub user {username}: {e}")
+        return False
+
+
+# -------------------------------
 # Label mapping
 # -------------------------------
 def map_labels(jira_labels):
@@ -430,7 +496,16 @@ def lambda_handler(event, context):
             return {"statusCode": 200, "body": json.dumps({"message": "No issue number, skipping"})}
 
         # Build GitHub comment body and include a marker to prevent loops
-        jira_author = comment.get("author", {}).get("displayName") or comment.get("author", {}).get("name") or "Jira user"
+        jira_author_obj = comment.get("author", {})
+        jira_author_email = jira_author_obj.get("emailAddress", "")
+        jira_author_name = jira_author_obj.get("displayName") or jira_author_obj.get("name") or "Jira user"
+        
+        # Try to map Jira user to GitHub user
+        user_mapping = get_user_mapping()
+        github_author = None
+        if jira_author_email and user_mapping:
+            github_author = user_mapping.get(jira_author_email.lower())
+        
         jira_base_url = os.environ.get("JIRA_BASE_URL", "")
         jira_url = f"{jira_base_url}/browse/{jira_key}"
         comment_created = comment.get("created", "")
@@ -445,9 +520,15 @@ def lambda_handler(event, context):
             except:
                 pass
         
+        # Build author attribution
+        if github_author:
+            author_str = f"@{github_author} ({jira_author_name})"
+        else:
+            author_str = jira_author_name
+        
         marker = f"<!-- jira-sync: jira_comment_id={jira_comment_id} -->"
         github_comment_body = f"""### 💬 Comment from Jira
-**Author:** {jira_author}{timestamp_str}
+**Author:** {author_str}{timestamp_str}
 
 {comment_body}
 
@@ -497,8 +578,14 @@ def lambda_handler(event, context):
     priority_obj = fields.get("priority")
     priority = priority_obj.get("name") if priority_obj else "Medium"
 
+    # Get reporter information
+    reporter = fields.get("reporter")
+    _, reporter_name = map_jira_user_to_github(reporter, get_user_mapping())
+    
+    # Get assignee information
     assignee = fields.get("assignee")
-    assignee_name = assignee.get("displayName") if assignee else "Unassigned"
+    user_mapping = get_user_mapping()
+    github_assignee, assignee_name = map_jira_user_to_github(assignee, user_mapping)
     
     # Debug: Log all available field keys to help identify the AC field
     print(f"Available Jira fields: {list(fields.keys())}")
@@ -573,14 +660,20 @@ def lambda_handler(event, context):
     if acceptance_criteria:
         ac_section = f"\n\n### Acceptance Criteria\n{acceptance_criteria}"
 
+    # Build assignee section with note if user doesn't exist in GitHub
+    assignee_section = f"**Assignee (Jira):** {assignee_name}"
+    if github_assignee:
+        assignee_section = f"**Assignee:** @{github_assignee} ({assignee_name})"
+
     github_body = f"""{description}
 
 ---
 
 ### Jira Details
 - **Jira Issue**: [{jira_key}]({jira_url})
-- **Priority**: {priority}
-- **Assignee**: {assignee_name}{ac_section}
+- **Reporter (Jira):** {reporter_name}
+- {assignee_section}
+- **Priority**: {priority}{ac_section}
 """
 
     github_labels = map_labels(labels)
@@ -591,17 +684,28 @@ def lambda_handler(event, context):
         owner = os.environ["GITHUB_OWNER"]
         repo = os.environ["GITHUB_REPO"]
 
+        # Prepare issue data
+        issue_data = {
+            "title": title[:256],     # GitHub limit safety
+            "body": github_body,
+            "labels": github_labels[:20]
+        }
+        
+        # Only assign if user exists in GitHub and is a collaborator
+        if github_assignee:
+            if verify_github_user_exists(github_assignee, token, owner, repo):
+                issue_data["assignees"] = [github_assignee]
+                print(f"✓ Will assign to GitHub user: @{github_assignee}")
+            else:
+                print(f"⚠ GitHub user @{github_assignee} not found or not a collaborator, skipping assignment")
+
         response = requests.post(
             f"https://api.github.com/repos/{owner}/{repo}/issues",
             headers={
                 "Authorization": f"token {token}",
                 "Accept": "application/vnd.github.v3+json"
             },
-            json={
-                "title": title[:256],     # GitHub limit safety
-                "body": github_body,
-                "labels": github_labels[:20]
-            },
+            json=issue_data,
             timeout=10
         )
 

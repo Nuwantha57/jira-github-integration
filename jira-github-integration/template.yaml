@@ -37,6 +37,7 @@ Resources:
           TARGET_LABEL: sync-to-github
           SECRET_NAME: jira-github-integration
           DYNAMODB_TABLE: jira-github-sync-state
+          USER_MAPPING: "nuwanthapiumal57@gmail.com:NuwanthaPiumal"  # Format: jira_email1@example.com:github_user1,jira_email2@example.com:github_user2
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*
