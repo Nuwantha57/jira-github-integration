@@ -941,12 +941,14 @@ def lambda_handler(event, context):
         
         marker = f"<!-- jira-sync: jira_comment_id={jira_comment_id} -->"
         github_comment_body = f"""### 💬 Comment from Jira
+
 **Author:** {author_str}{timestamp_str}
 
 {comment_body}
 
 ---
 *[View in Jira]({jira_url}?focusedCommentId={jira_comment_id})*
+
 {marker}"""
 
         # Post comment to GitHub
@@ -1213,14 +1215,17 @@ def lambda_handler(event, context):
                                     end_idx = start_idx + current_body[start_idx:].index("### 📌 Jira Details")
                                 description_section = current_body[start_idx:end_idx].rstrip()
                             
-                            # Get updated priority and AC
+                            # Extract existing Acceptance Criteria section from GitHub issue
+                            existing_ac_section = ""
+                            if "## 🎯 Acceptance Criteria" in current_body:
+                                start_idx = current_body.index("## 🎯 Acceptance Criteria")
+                                existing_ac_section = current_body[start_idx:].rstrip()
+                            
+                            # Get updated priority
                             priority_obj = fields.get("priority")
                             priority = priority_obj.get("name") if priority_obj else "Medium"
                             
-                            # Get acceptance criteria
-                            acceptance_criteria = fields.get("customfield_10074")
-                            
-                            # Get reporter and assignee info
+                            # Setup credentials and base URL for AC parsing
                             jira_base_url = os.environ["JIRA_BASE_URL"]
                             jira_url = f"{jira_base_url}/browse/{jira_key}"
                             
@@ -1228,9 +1233,45 @@ def lambda_handler(event, context):
                             secrets = get_secrets()
                             jira_credentials = {
                                 'email': secrets.get('jira_email'),
-                                'token': secrets.get('jira_api_token')
+                                'token': secrets.get('jira_api_token'),
+                                'github_token': secrets.get('github_token'),
+                                'github_owner': os.environ.get('GITHUB_OWNER'),
+                                'github_repo': os.environ.get('GITHUB_REPO')
                             }
                             
+                            # Only update AC if this is an AC update, otherwise preserve existing
+                            ac_section = ""
+                            if ac_updated:
+                                print(f"AC was updated, fetching new AC from Jira")
+                                # Get acceptance criteria and parse if needed
+                                acceptance_criteria_raw = fields.get("customfield_10074")
+                                acceptance_criteria = None
+                                if acceptance_criteria_raw:
+                                    if isinstance(acceptance_criteria_raw, dict):
+                                        # It's ADF format, need to get attachments and parse
+                                        jira_attachments = fields.get("attachment", [])
+                                        print(f"Parsing AC as ADF format...")
+                                        acceptance_criteria = parse_jira_adf_to_text(acceptance_criteria_raw, user_mapping, jira_base_url, jira_attachments, jira_credentials)
+                                        print(f"Parsed AC: {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
+                                    else:
+                                        # It's plain text
+                                        acceptance_criteria = acceptance_criteria_raw
+                                        print(f"Using AC as plain text: {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
+                                
+                                if acceptance_criteria:
+                                    ac_section = f"\n\n## 🎯 Acceptance Criteria\n{acceptance_criteria}"
+                                    print(f"✓ Built new AC section")
+                                else:
+                                    print("⚠ No AC content found in Jira")
+                            else:
+                                # Preserve existing AC section
+                                if existing_ac_section:
+                                    ac_section = "\n\n" + existing_ac_section
+                                    print(f"Preserving existing AC section")
+                                else:
+                                    print("No existing AC section to preserve")
+                            
+                            # Get reporter and assignee info (using credentials already set above)
                             reporter = fields.get("reporter")
                             _, reporter_name = map_jira_user_to_github(reporter, user_mapping, jira_base_url, jira_credentials)
                             
@@ -1249,12 +1290,7 @@ def lambda_handler(event, context):
 - {assignee_section}
 - **Priority**: {priority}"""
                             
-                            # Build acceptance criteria section
-                            ac_section = ""
-                            if acceptance_criteria:
-                                ac_section = f"\n\n## 🎯 Acceptance Criteria\n{acceptance_criteria}"
-                            
-                            # Rebuild full body
+                            # Rebuild full body (ac_section is already built above based on ac_updated flag)
                             new_body = description_section + "\n\n" + jira_details_section + ac_section
                             
                             # Update GitHub issue
@@ -1318,23 +1354,49 @@ def lambda_handler(event, context):
     # Debug: Log all available field keys to help identify the AC field
     print(f"Available Jira fields: {list(fields.keys())}")
     
-    # Debug: Log custom field values (first 100 chars) to identify AC field
-    print("\n--- Custom Field Values ---")
+    # Debug: Log ALL custom field values to identify AC field
+    print("\n--- ALL Custom Field Values (including empty) ---")
     for field_key in sorted(fields.keys()):
         if field_key.startswith('customfield_'):
             field_value = fields.get(field_key)
-            if field_value and isinstance(field_value, str) and field_value.strip():
-                preview = field_value[:100].replace('\n', ' ')
-                print(f"{field_key}: {preview}...")
+            if field_value:
+                # Check if it's dict (ADF), string, or other type
+                if isinstance(field_value, dict):
+                    preview = str(field_value)[:150].replace('\n', ' ')
+                    print(f"{field_key} = (dict/ADF): {preview}...")
+                elif isinstance(field_value, str) and field_value.strip():
+                    preview = field_value[:150].replace('\n', ' ')
+                    print(f"{field_key} = (string): {preview}...")
+                elif isinstance(field_value, list):
+                    print(f"{field_key} = (list): {str(field_value)[:100]}")
+                else:
+                    print(f"{field_key} = (type={type(field_value).__name__}): {str(field_value)[:100]}")
+            else:
+                print(f"{field_key} = (empty/None)")
     print("--- End Custom Fields ---\n")
     
     # Extract Acceptance Criteria (can be in different fields depending on Jira setup)
     acceptance_criteria = None
+    acceptance_criteria_raw = None
     
     # First, check the known AC field for this Jira instance
     if fields.get("customfield_10074"):
-        acceptance_criteria = fields.get("customfield_10074")
-        print(f"Found Acceptance Criteria in customfield_10074: {acceptance_criteria[:100]}...")
+        acceptance_criteria_raw = fields.get("customfield_10074")
+        print(f"Found Acceptance Criteria in customfield_10074")
+        print(f"AC Raw Type: {type(acceptance_criteria_raw).__name__}")
+        print(f"AC Raw Value (first 200 chars): {str(acceptance_criteria_raw)[:200]}")
+        
+        # Parse AC if it's in ADF format (like description)
+        if isinstance(acceptance_criteria_raw, dict):
+            # It's ADF format, parse it
+            print("Parsing AC as ADF format...")
+            acceptance_criteria = parse_jira_adf_to_text(acceptance_criteria_raw, user_mapping, jira_base_url, jira_attachments, jira_credentials)
+            print(f"Parsed AC (first 200 chars): {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
+        else:
+            # It's plain text
+            print("Using AC as plain text")
+            acceptance_criteria = acceptance_criteria_raw
+            print(f"AC Text (first 200 chars): {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
     
     # If not found, try common custom field patterns and names
     if not acceptance_criteria:
@@ -1389,6 +1451,9 @@ def lambda_handler(event, context):
     ac_section = ""
     if acceptance_criteria:
         ac_section = f"\n\n## 🎯 Acceptance Criteria\n{acceptance_criteria}"
+        print(f"✓ Built AC section ({len(acceptance_criteria)} chars)")
+    else:
+        print("⚠ No AC section - acceptance_criteria is empty/None")
 
     # Build assignee section with note if user doesn't exist in GitHub
     assignee_section = f"**Assignee (Jira):** {assignee_name}"
