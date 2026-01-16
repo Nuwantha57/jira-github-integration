@@ -206,14 +206,35 @@ def extract_sync_marker(comment_body, source="jira"):
         return match.group(1) if match else None
 
 
-def parse_jira_adf_to_text(adf_content):
-    """Convert Jira ADF (Atlassian Document Format) to plain text."""
+def parse_jira_adf_to_text(adf_content, user_mapping=None):
+    """Convert Jira ADF (Atlassian Document Format) or wiki markup to plain text with GitHub mentions."""
     if not adf_content:
         return ""
     
-    # If it's already a string, return it
+    # If it's already a string, it might be wiki markup - parse mentions
     if isinstance(adf_content, str):
-        return adf_content
+        # Handle wiki markup mentions: [~accountid:712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e]
+        import re
+        
+        def replace_mention(match):
+            account_id = match.group(1)  # e.g., "accountid:712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e"
+            
+            # Remove "accountid:" prefix if present
+            if account_id.startswith("accountid:"):
+                account_id = account_id[10:]  # Remove "accountid:" (10 chars)
+            
+            # Try to map to GitHub username if user_mapping is provided
+            if user_mapping and account_id:
+                github_user = user_mapping.get('accountid', {}).get(account_id)
+                if github_user:
+                    return f"@{github_user}"
+            
+            # Fall back to a generic mention
+            return f"@user"
+        
+        # Replace all [~accountid:...] or [~username] patterns
+        text = re.sub(r'\[~([^\]]+)\]', replace_mention, adf_content)
+        return text
     
     # If it's ADF format (dict with 'type' and 'content')
     if isinstance(adf_content, dict):
@@ -231,9 +252,20 @@ def parse_jira_adf_to_text(adf_content):
                 if "content" in node:
                     return "".join(extract_text(child) for child in node["content"])
                 
-                # Mention node
+                # Mention node - convert Jira mention to GitHub mention
                 if node_type == "mention":
-                    return f"@{node.get('attrs', {}).get('text', 'user')}"
+                    attrs = node.get('attrs', {})
+                    account_id = attrs.get('id', '')  # e.g., "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e"
+                    display_text = attrs.get('text', 'user')
+                    
+                    # Try to map to GitHub username if user_mapping is provided
+                    if user_mapping and account_id:
+                        github_user = user_mapping.get('accountid', {}).get(account_id)
+                        if github_user:
+                            return f"@{github_user}"
+                    
+                    # Fall back to display text
+                    return f"@{display_text}"
                 
                 # Hard break
                 if node_type == "hardBreak":
@@ -481,9 +513,14 @@ def lambda_handler(event, context):
         comment = body.get("comment")
         jira_comment_id = str(comment.get("id"))
         
+        # Get user mapping for mention conversion
+        user_mapping = get_user_mapping()
+        
         # Extract comment body - Jira uses ADF (Atlassian Document Format)
         comment_body_raw = comment.get("body", "") or ""
-        comment_body = parse_jira_adf_to_text(comment_body_raw)
+        print(f"DEBUG: comment_body_raw type: {type(comment_body_raw)}")
+        print(f"DEBUG: comment_body_raw: {str(comment_body_raw)[:500]}")
+        comment_body = parse_jira_adf_to_text(comment_body_raw, user_mapping)
         
         print(f"Processing Jira comment {jira_comment_id}")
         print(f"Comment body preview: {comment_body[:100]}...")
@@ -525,11 +562,10 @@ def lambda_handler(event, context):
         jira_author_email = jira_author_obj.get("emailAddress", "")
         jira_author_name = jira_author_obj.get("displayName") or jira_author_obj.get("name") or "Jira user"
         
-        # Try to map Jira user to GitHub user
-        user_mapping = get_user_mapping()
+        # Try to map Jira user to GitHub user (user_mapping already fetched above)
         github_author = None
         if jira_author_email and user_mapping:
-            github_author = user_mapping.get(jira_author_email.lower())
+            github_author = user_mapping.get('email', {}).get(jira_author_email.lower())
         
         jira_base_url = os.environ.get("JIRA_BASE_URL", "")
         jira_url = f"{jira_base_url}/browse/{jira_key}"
