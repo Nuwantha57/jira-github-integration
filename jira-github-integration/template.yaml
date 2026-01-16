@@ -34,6 +34,7 @@ Resources:
           GITHUB_OWNER: Nuwantha57
           GITHUB_REPO: jira-sync-test
           JIRA_BASE_URL: https://nuwanthapiumal57.atlassian.net
+          JIRA_EMAIL: nuwanthapiumal57@gmail.com
           TARGET_LABEL: sync-to-github
           SECRET_NAME: jira-github-integration
           DYNAMODB_TABLE: jira-github-sync-state

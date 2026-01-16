@@ -41,6 +41,16 @@ def get_github_token():
     return secrets["github_token"]
 
 
+def get_jira_token():
+    """
+    Fetch Jira API token from AWS Secrets Manager
+    """
+    secrets = get_secrets()
+    if "jira_api_token" not in secrets:
+        raise Exception("'jira_api_token' not found in secret")
+    return secrets["jira_api_token"]
+
+
 # -------------------------------
 # DynamoDB State Management
 # -------------------------------
@@ -206,12 +216,16 @@ def extract_sync_marker(comment_body, source="jira"):
         return match.group(1) if match else None
 
 
-def parse_jira_adf_to_text(adf_content, user_mapping=None):
-    """Convert Jira ADF (Atlassian Document Format) or wiki markup to plain text with GitHub mentions."""
+def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, jira_attachments=None, jira_credentials=None):
+    """Convert Jira ADF (Atlassian Document Format) or wiki markup to plain text with GitHub mentions and images.
+    
+    Args:
+        jira_credentials: Dict with 'email' and 'token' for downloading images
+    """
     if not adf_content:
         return ""
     
-    # If it's already a string, it might be wiki markup - parse mentions
+    # If it's already a string, it might be wiki markup - parse mentions and images
     if isinstance(adf_content, str):
         # Handle wiki markup mentions: [~accountid:712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e]
         import re
@@ -234,13 +248,89 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None):
         
         # Replace all [~accountid:...] or [~username] patterns
         text = re.sub(r'\[~([^\]]+)\]', replace_mention, adf_content)
+        
+        # Handle wiki markup images: !image.png! or !image.png|width=494,alt="text"!
+        if '!' in text:
+            def replace_image(match):
+                image_markup = match.group(1)  # e.g., "test-img.png|width=494,alt="test-img.png""
+                
+                # Parse image name and attributes
+                parts = image_markup.split('|', 1)
+                image_name = parts[0].strip()
+                
+                print(f"DEBUG: Parsing image: {image_name}")
+                print(f"DEBUG: Available attachments: {[a.get('filename') for a in (jira_attachments or [])]}")
+                
+                # Parse attributes if present
+                width = None
+                alt = image_name
+                if len(parts) > 1:
+                    attrs = parts[1]
+                    # Extract width
+                    width_match = re.search(r'width=(\d+)', attrs)
+                    if width_match:
+                        width = width_match.group(1)
+                    # Extract alt text
+                    alt_match = re.search(r'alt="([^"]*)"', attrs)
+                    if alt_match:
+                        alt = alt_match.group(1)
+                
+                # Try to find attachment URL from jira_attachments list
+                image_url = None
+                if jira_attachments:
+                    for attachment in jira_attachments:
+                        if attachment.get('filename') == image_name:
+                            image_url = attachment.get('content')
+                            print(f"DEBUG: Found attachment URL: {image_url}")
+                            break
+                
+                if not image_url:
+                    print(f"DEBUG: No matching attachment found for {image_name}")
+                
+                # Download and upload image to GitHub repository
+                if image_url and jira_credentials:
+                    # Get GitHub credentials
+                    github_token = jira_credentials.get('github_token')
+                    github_owner = jira_credentials.get('github_owner')
+                    github_repo = jira_credentials.get('github_repo')
+                    
+                    github_image_url = upload_image_to_github(
+                        image_url, 
+                        image_name,
+                        jira_credentials.get('email'),
+                        jira_credentials.get('token'),
+                        github_token,
+                        github_owner,
+                        github_repo
+                    )
+                    
+                    if github_image_url:
+                        # Embed image using GitHub URL
+                        if width:
+                            return f'\n\n<img src="{github_image_url}" alt="{alt}" width="{width}" />\n\n'
+                        else:
+                            return f'\n\n![{alt}]({github_image_url})\n\n'
+                
+                # Fallback to link if download failed or no credentials
+                if image_url:
+                    if width:
+                        return f'\n\n> 📷 **Image:** `{image_name}` (width: {width}px)\n> 🔗 [View in Jira]({image_url})\n\n'
+                    else:
+                        return f'\n\n> 📷 **Image:** `{image_name}`\n> 🔗 [View in Jira]({image_url})\n\n'
+                else:
+                    # Fallback if attachment not found
+                    return f'\n\n> 📎 **Image:** {image_name}\n> ⚠️ *Attachment not found in issue data*\n\n'
+            
+            # Replace all !image! patterns
+            text = re.sub(r'!([^!]+)!', replace_image, text)
+        
         return text
     
     # If it's ADF format (dict with 'type' and 'content')
     if isinstance(adf_content, dict):
         text_parts = []
         
-        def extract_text(node):
+        def extract_text(node, depth=0):
             if isinstance(node, dict):
                 node_type = node.get("type")
                 
@@ -248,9 +338,89 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None):
                 if node_type == "text":
                     return node.get("text", "")
                 
-                # Nodes with content array
+                # Paragraph node - add newlines
+                if node_type == "paragraph":
+                    if "content" in node:
+                        para_text = "".join(extract_text(child, depth+1) for child in node["content"])
+                        return para_text + "\n\n"
+                    return "\n\n"
+                
+                # Heading nodes
+                if node_type == "heading":
+                    level = node.get("attrs", {}).get("level", 1)
+                    heading_prefix = "#" * level
+                    if "content" in node:
+                        heading_text = "".join(extract_text(child, depth+1) for child in node["content"])
+                        return f"{heading_prefix} {heading_text}\n\n"
+                    return ""
+                
+                # Media node - handle images, videos, GIFs
+                if node_type == "media" or node_type == "mediaInline" or node_type == "mediaSingle":
+                    attrs = node.get('attrs', {})
+                    
+                    # If it's a mediaSingle, look for media child
+                    if node_type == "mediaSingle" and "content" in node:
+                        for child in node["content"]:
+                            if child.get("type") == "media":
+                                return extract_text(child, depth+1)
+                    
+                    # Extract media attributes
+                    media_id = attrs.get('id', '')
+                    media_type = attrs.get('type', 'file')  # file, link, external
+                    collection = attrs.get('collection', '')
+                    alt_text = attrs.get('alt', 'image')
+                    width = attrs.get('width')
+                    height = attrs.get('height')
+                    
+                    # Build Jira media URL
+                    if media_id and jira_base_url:
+                        # Jira Cloud media URL format
+                        media_url = f"{jira_base_url}/rest/api/3/attachment/content/{media_id}"
+                        
+                        # Generate markdown image
+                        size_attr = ""
+                        if width:
+                            size_attr = f' width="{width}"'
+                        
+                        # Use HTML img tag for better control, or markdown
+                        if size_attr:
+                            return f'<img src="{media_url}" alt="{alt_text}"{size_attr} />\n\n'
+                        else:
+                            return f"![{alt_text}]({media_url})\n\n"
+                    
+                    return ""
+                
+                # Code block
+                if node_type == "codeBlock":
+                    language = node.get("attrs", {}).get("language", "")
+                    if "content" in node:
+                        code_text = "".join(extract_text(child, depth+1) for child in node["content"])
+                        return f"```{language}\n{code_text}```\n\n"
+                    return ""
+                
+                # Bullet list
+                if node_type == "bulletList":
+                    if "content" in node:
+                        return "".join(extract_text(child, depth+1) for child in node["content"])
+                    return ""
+                
+                # Ordered list
+                if node_type == "orderedList":
+                    if "content" in node:
+                        return "".join(extract_text(child, depth+1) for child in node["content"])
+                    return ""
+                
+                # List item
+                if node_type == "listItem":
+                    indent = "  " * depth
+                    if "content" in node:
+                        item_text = "".join(extract_text(child, depth+1) for child in node["content"]).strip()
+                        return f"{indent}- {item_text}\n"
+                    return ""
+                
+                # Nodes with content array (generic handler)
                 if "content" in node:
-                    return "".join(extract_text(child) for child in node["content"])
+                    return "".join(extract_text(child, depth) for child in node["content"])
                 
                 # Mention node - convert Jira mention to GitHub mention
                 if node_type == "mention":
@@ -272,7 +442,7 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None):
                     return "\n"
                 
             elif isinstance(node, list):
-                return "".join(extract_text(item) for item in node)
+                return "".join(extract_text(item, depth) for item in node)
             
             return ""
         
@@ -280,6 +450,100 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None):
         return result.strip()
     
     return str(adf_content)
+
+
+def upload_image_to_github_repo(image_data, image_name, github_token, owner, repo):
+    """Upload image to GitHub repository and return the URL."""
+    try:
+        import base64
+        from datetime import datetime
+        
+        # Create a unique path for the image in the repo
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        safe_name = image_name.replace(' ', '_')
+        file_path = f".jira-attachments/{timestamp}_{safe_name}"
+        
+        # Encode image data to base64
+        content_b64 = base64.b64encode(image_data).decode('ascii')
+        
+        # Upload to GitHub repository using Contents API
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{file_path}"
+        
+        payload = {
+            "message": f"Upload Jira attachment: {image_name}",
+            "content": content_b64,
+            "branch": "main"  # or "master" depending on your default branch
+        }
+        
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        
+        print(f"Uploading image to GitHub repo: {file_path}")
+        resp = requests.put(url, json=payload, headers=headers, timeout=30)
+        
+        if resp.status_code not in [200, 201]:
+            print(f"Failed to upload to GitHub: {resp.status_code}")
+            print(f"Response: {resp.text[:500]}")
+            return None
+        
+        result = resp.json()
+        # Get the raw content URL
+        download_url = result.get('content', {}).get('download_url')
+        
+        print(f"Image uploaded successfully: {download_url}")
+        return download_url
+        
+    except Exception as e:
+        print(f"Error uploading image to GitHub: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def upload_image_to_github(jira_image_url, image_name, jira_email, jira_token, github_token=None, github_owner=None, github_repo=None):
+    """Download image from Jira and upload to GitHub repository."""
+    try:
+        # Download image from Jira with authentication
+        import base64
+        
+        auth_str = f"{jira_email}:{jira_token}"
+        auth_bytes = auth_str.encode('ascii')
+        auth_b64 = base64.b64encode(auth_bytes).decode('ascii')
+        
+        print(f"Downloading image from Jira: {jira_image_url}")
+        resp = requests.get(
+            jira_image_url,
+            headers={
+                "Authorization": f"Basic {auth_b64}",
+                "Accept": "*/*",
+                "X-Atlassian-Token": "no-check"
+            },
+            timeout=30,
+            allow_redirects=True
+        )
+        
+        if resp.status_code != 200:
+            print(f"Failed to download image: {resp.status_code}")
+            print(f"Response headers: {resp.headers}")
+            print(f"Response text: {resp.text[:200] if resp.text else 'No content'}")
+            return None
+        
+        image_data = resp.content
+        print(f"Downloaded {len(image_data)} bytes")
+        
+        # Upload to GitHub repository if credentials provided
+        if github_token and github_owner and github_repo:
+            return upload_image_to_github_repo(image_data, image_name, github_token, github_owner, github_repo)
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error processing image: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 def post_github_comment(owner, repo, issue_number, body_text, token):
@@ -502,6 +766,9 @@ def lambda_handler(event, context):
         return {"statusCode": 400, "body": "Missing issue object"}
 
     fields = issue.get("fields", {})
+    
+    # Extract attachments from the issue for image resolution
+    jira_attachments = fields.get("attachment", [])
 
     # ---- Step 3: Extract fields safely
     jira_key = issue.get("key", "UNKNOWN")
@@ -515,12 +782,23 @@ def lambda_handler(event, context):
         
         # Get user mapping for mention conversion
         user_mapping = get_user_mapping()
+        jira_base_url = os.environ.get("JIRA_BASE_URL", "")
         
         # Extract comment body - Jira uses ADF (Atlassian Document Format)
         comment_body_raw = comment.get("body", "") or ""
         print(f"DEBUG: comment_body_raw type: {type(comment_body_raw)}")
         print(f"DEBUG: comment_body_raw: {str(comment_body_raw)[:500]}")
-        comment_body = parse_jira_adf_to_text(comment_body_raw, user_mapping)
+        
+        # Prepare Jira credentials for image downloading
+        secrets = get_secrets()
+        jira_credentials = {
+            'email': secrets.get('jira_email'),
+            'token': secrets.get('jira_api_token'),
+            'github_token': secrets.get('github_token'),
+            'github_owner': os.environ.get('GITHUB_OWNER'),
+            'github_repo': os.environ.get('GITHUB_REPO')
+        }
+        comment_body = parse_jira_adf_to_text(comment_body_raw, user_mapping, jira_base_url, jira_attachments, jira_credentials)
         
         print(f"Processing Jira comment {jira_comment_id}")
         print(f"Comment body preview: {comment_body[:100]}...")
@@ -675,7 +953,15 @@ def lambda_handler(event, context):
                             
                             # Parse description if it's ADF format
                             user_mapping = get_user_mapping()
-                            description_text = parse_jira_adf_to_text(description, user_mapping)
+                            secrets = get_secrets()
+                            jira_credentials = {
+                                'email': secrets.get('jira_email'),
+                                'token': secrets.get('jira_api_token'),
+                                'github_token': secrets.get('github_token'),
+                                'github_owner': os.environ.get('GITHUB_OWNER'),
+                                'github_repo': os.environ.get('GITHUB_REPO')
+                            }
+                            description_text = parse_jira_adf_to_text(description, user_mapping, jira_base_url, jira_attachments, jira_credentials)
                             
                             # Extract existing sections to preserve them
                             jira_details_section = ""
@@ -836,26 +1122,41 @@ def lambda_handler(event, context):
     # ---- Step 5: Build GitHub issue body
     jira_base_url = os.environ["JIRA_BASE_URL"]
     jira_url = f"{jira_base_url}/browse/{jira_key}"
+    
+    # Prepare Jira credentials for image downloading
+    secrets = get_secrets()
+    jira_credentials = {
+        'email': secrets.get('jira_email'),
+        'token': secrets.get('jira_api_token'),
+        'github_token': secrets.get('github_token'),
+        'github_owner': os.environ.get('GITHUB_OWNER'),
+        'github_repo': os.environ.get('GITHUB_REPO')
+    }
+    
+    # Parse description for ADF format, mentions, and images
+    description_text = parse_jira_adf_to_text(description, user_mapping, jira_base_url, jira_attachments, jira_credentials)
 
     # Build acceptance criteria section if available
     ac_section = ""
     if acceptance_criteria:
-        ac_section = f"\n\n### Acceptance Criteria\n{acceptance_criteria}"
+        ac_section = f"\n\n## 🎯 Acceptance Criteria\n{acceptance_criteria}"
 
     # Build assignee section with note if user doesn't exist in GitHub
     assignee_section = f"**Assignee (Jira):** {assignee_name}"
     if github_assignee:
         assignee_section = f"**Assignee:** @{github_assignee} ({assignee_name})"
 
-    github_body = f"""{description}
+    github_body = f"""## 📋 Description
+{description_text}
 
----
-
-### Jira Details
+### 📌 Jira Details
 - **Jira Issue**: [{jira_key}]({jira_url})
 - **Reporter (Jira):** {reporter_name}
 - {assignee_section}
 - **Priority**: {priority}{ac_section}
+
+---
+*Synced from Jira: [{jira_key}]({jira_url})*
 """
 
     github_labels = map_labels(labels)
