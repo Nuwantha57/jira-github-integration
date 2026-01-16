@@ -981,11 +981,13 @@ def lambda_handler(event, context):
         webhook_event = body.get("webhookEvent", "")
         changelog = body.get("changelog", {})
         
-        # Check if description was updated
+        # Check if description or labels were updated
         if changelog:
             items = changelog.get("items", [])
             description_updated = any(item.get("field") == "description" for item in items)
+            labels_updated = any(item.get("field") == "labels" for item in items)
             
+            # Handle description update
             if description_updated:
                 print(f"Description updated for {jira_key}, syncing to GitHub")
                 
@@ -1083,6 +1085,47 @@ def lambda_handler(event, context):
                             
                     except Exception as e:
                         print(f"Error updating GitHub issue description: {e}")
+            
+            # Handle label update
+            if labels_updated:
+                print(f"Labels updated for {jira_key}, syncing to GitHub")
+                
+                # Get GitHub issue number
+                github_issue_number = sync_item.get("github_issue_number")
+                if not github_issue_number and sync_item.get("github_issue_url"):
+                    try:
+                        github_issue_number = int(sync_item.get("github_issue_url").rstrip('/').split('/')[-1])
+                    except Exception:
+                        pass
+                
+                if github_issue_number:
+                    try:
+                        # Get GitHub credentials
+                        token = get_github_token()
+                        owner = os.environ["GITHUB_OWNER"]
+                        repo = os.environ["GITHUB_REPO"]
+                        
+                        # Get current labels from Jira
+                        labels = fields.get("labels", [])
+                        github_labels = map_labels(labels)
+                        
+                        # Update GitHub issue labels
+                        url = f"https://api.github.com/repos/{owner}/{repo}/issues/{github_issue_number}"
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Accept": "application/vnd.github.v3+json",
+                            "User-Agent": "jira-github-integration"
+                        }
+                        update_data = {"labels": github_labels}
+                        resp = requests.patch(url, json=update_data, headers=headers, timeout=30)
+                        
+                        if resp.status_code == 200:
+                            print(f"✓ Updated GitHub issue #{github_issue_number} labels: {github_labels}")
+                            return {"statusCode": 200, "body": json.dumps({"message": "Labels synced to GitHub"})}
+                        else:
+                            print(f"Failed to update GitHub issue labels: {resp.status_code} - {resp.text}")
+                    except Exception as e:
+                        print(f"Error updating GitHub issue labels: {e}")
         
         # No updates to sync, skip
         print(f"⊘ No relevant updates for {jira_key}, skipping")
