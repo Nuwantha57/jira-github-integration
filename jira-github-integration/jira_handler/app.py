@@ -980,15 +980,9 @@ def lambda_handler(event, context):
                             # Extract Acceptance Criteria section
                             if "## 🎯 Acceptance Criteria" in current_body:
                                 start_idx = current_body.index("## 🎯 Acceptance Criteria")
-                                # Find where it ends (either at --- or end)
+                                # Find where it ends
                                 end_idx = len(current_body)
-                                if "---\n*Synced from Jira:" in current_body[start_idx:]:
-                                    end_idx = start_idx + current_body[start_idx:].index("---\n*Synced from Jira:")
                                 acceptance_criteria_section = current_body[start_idx:end_idx].rstrip()
-                            
-                            # Extract footer
-                            if "---\n*Synced from Jira:" in current_body:
-                                footer_section = current_body[current_body.index("---\n*Synced from Jira:"):]
                             
                             # Rebuild body with updated description while preserving other sections
                             new_body = f"""## 📋 Description
@@ -999,13 +993,7 @@ def lambda_handler(event, context):
                                 new_body += jira_details_section + "\n\n"
                             
                             if acceptance_criteria_section:
-                                new_body += acceptance_criteria_section + "\n\n"
-                            
-                            if footer_section:
-                                new_body += footer_section
-                            else:
-                                new_body += f"""---
-*Synced from Jira: [{jira_key}]({jira_url})*"""
+                                new_body += acceptance_criteria_section
                             
                             # Update GitHub issue
                             update_data = {"body": new_body}
@@ -1150,13 +1138,10 @@ def lambda_handler(event, context):
 {description_text}
 
 ### 📌 Jira Details
-- **Jira Issue**: [{jira_key}]({jira_url})
-- **Reporter (Jira):** {reporter_name}
+- **Issue**: [{jira_key}]({jira_url})
+- **Reporter:** {reporter_name}
 - {assignee_section}
 - **Priority**: {priority}{ac_section}
-
----
-*Synced from Jira: [{jira_key}]({jira_url})*
 """
 
     github_labels = map_labels(labels)
@@ -1174,13 +1159,10 @@ def lambda_handler(event, context):
             "labels": github_labels[:20]
         }
         
-        # Only assign if user exists in GitHub and is a collaborator
+        # Assign to GitHub user if mapped
         if github_assignee:
-            if verify_github_user_exists(github_assignee, token, owner, repo):
-                issue_data["assignees"] = [github_assignee]
-                print(f"✓ Will assign to GitHub user: @{github_assignee}")
-            else:
-                print(f"⚠ GitHub user @{github_assignee} not found or not a collaborator, skipping assignment")
+            issue_data["assignees"] = [github_assignee]
+            print(f"✓ Will assign to GitHub user: @{github_assignee}")
 
         response = requests.post(
             f"https://api.github.com/repos/{owner}/{repo}/issues",
