@@ -38,7 +38,7 @@ Resources:
           TARGET_LABEL: sync-to-github
           SECRET_NAME: jira-github-integration
           DYNAMODB_TABLE: jira-github-sync-state
-          USER_MAPPING: "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e:NuwanthaPiumal"  # Format: jira_accountid:github_user OR jira_email:github_user (comma-separated)
+          USER_MAPPING: "nuwanthapiumal57@gmail.com:NuwanthaPiumal"  # Format: jira_email:github_user (comma-separated for multiple users)
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*
@@ -63,7 +63,7 @@ Resources:
           JIRA_BASE_URL: https://nuwanthapiumal57.atlassian.net
           SECRET_NAME: jira-github-integration
           DYNAMODB_TABLE: jira-github-sync-state
-          USER_MAPPING: "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e:NuwanthaPiumal"
+          USER_MAPPING: "nuwanthapiumal57@gmail.com:NuwanthaPiumal"
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*

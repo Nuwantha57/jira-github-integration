@@ -52,6 +52,85 @@ def get_jira_token():
 
 
 # -------------------------------
+# User Mapping with Dynamic AccountId Lookup
+# -------------------------------
+def get_accountid_from_email(email, jira_base_url, jira_credentials):
+    """
+    Query Jira API to get accountId from email address.
+    Uses DynamoDB caching to minimize API calls.
+    Cache TTL: 24 hours
+    
+    Args:
+        email: Jira user email address
+        jira_base_url: Jira instance URL
+        jira_credentials: Dict with 'email' and 'token' for Basic auth
+    
+    Returns:
+        accountId string or None if not found
+    """
+    table_name = os.environ.get("DYNAMODB_TABLE", "jira-github-sync-state")
+    table = dynamodb.Table(table_name)
+    cache_key = f"user_email_lookup#{email.lower()}"
+    
+    # Check cache first
+    try:
+        response = table.get_item(Key={"jira_issue_key": cache_key})
+        if "Item" in response:
+            item = response["Item"]
+            # Check if cache is still valid (TTL not expired)
+            if "ttl" in item and item["ttl"] > int(time.time()):
+                account_id = item.get("accountId")
+                if account_id:
+                    print(f"✓ Cache hit: {email} -> {account_id}")
+                    return account_id
+    except ClientError as e:
+        print(f"Cache lookup error: {e}")
+    
+    # Cache miss - query Jira API
+    print(f"Cache miss - querying Jira API for: {email}")
+    url = f"{jira_base_url}/rest/api/3/user/search"
+    params = {"query": email}
+    
+    try:
+        auth = (jira_credentials.get("email"), jira_credentials.get("token"))
+        resp = requests.get(url, params=params, auth=auth, timeout=10)
+        
+        if resp.status_code == 200:
+            users = resp.json()
+            if users and len(users) > 0:
+                # Find exact email match
+                for user in users:
+                    if user.get("emailAddress", "").lower() == email.lower():
+                        account_id = user.get("accountId")
+                        print(f"✓ Found accountId via API: {email} -> {account_id}")
+                        
+                        # Cache the result for 24 hours
+                        try:
+                            ttl = int(time.time()) + (24 * 60 * 60)
+                            table.put_item(Item={
+                                "jira_issue_key": cache_key,
+                                "accountId": account_id,
+                                "email": email.lower(),
+                                "cached_at": datetime.utcnow().isoformat(),
+                                "ttl": ttl
+                            })
+                            print(f"✓ Cached accountId for 24 hours")
+                        except ClientError as e:
+                            print(f"Cache write error: {e}")
+                        
+                        return account_id
+                
+                print(f"⚠ No exact email match found in API results for: {email}")
+                return None
+        else:
+            print(f"⚠ Jira API error: {resp.status_code} - {resp.text[:200]}")
+            return None
+    except Exception as e:
+        print(f"Error querying Jira API: {e}")
+        return None
+
+
+# -------------------------------
 # DynamoDB State Management
 # -------------------------------
 def is_already_synced(jira_key):
@@ -237,11 +316,13 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
             if account_id.startswith("accountid:"):
                 account_id = account_id[10:]  # Remove "accountid:" (10 chars)
             
-            # Try to map to GitHub username if user_mapping is provided
-            if user_mapping and account_id:
-                github_user = user_mapping.get('accountid', {}).get(account_id)
-                if github_user:
-                    return f"@{github_user}"
+            # Try to map accountId to GitHub username using dynamic lookup
+            if user_mapping and account_id and jira_base_url and jira_credentials:
+                # Try each email in mapping to find which one matches this accountId
+                for email, github_user in user_mapping.items():
+                    lookup_account_id = get_accountid_from_email(email, jira_base_url, jira_credentials)
+                    if lookup_account_id and lookup_account_id == account_id:
+                        return f"@{github_user}"
             
             # Fall back to a generic mention
             return f"@user"
@@ -428,11 +509,13 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
                     account_id = attrs.get('id', '')  # e.g., "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e"
                     display_text = attrs.get('text', 'user')
                     
-                    # Try to map to GitHub username if user_mapping is provided
-                    if user_mapping and account_id:
-                        github_user = user_mapping.get('accountid', {}).get(account_id)
-                        if github_user:
-                            return f"@{github_user}"
+                    # Try to map accountId to GitHub username using dynamic lookup
+                    if user_mapping and account_id and jira_base_url and jira_credentials:
+                        # Try each email in mapping to find which one matches this accountId
+                        for email, github_user in user_mapping.items():
+                            lookup_account_id = get_accountid_from_email(email, jira_base_url, jira_credentials)
+                            if lookup_account_id and lookup_account_id == account_id:
+                                return f"@{github_user}"
                     
                     # Fall back to display text
                     return f"@{display_text}"
@@ -569,63 +652,57 @@ def post_github_comment(owner, repo, issue_number, body_text, token):
 # -------------------------------
 def get_user_mapping():
     """
-    Get user mapping from environment or use default mapping.
-    Supports two formats:
-    1. Email-based: JIRA_EMAIL:GITHUB_USERNAME
-    2. AccountId-based: JIRA_ACCOUNTID:GITHUB_USERNAME
-    Format: mapping1,mapping2,mapping3
+    Get user mapping from environment.
+    Format: email:github_username (comma-separated for multiple users)
+    Example: "user1@example.com:githubuser1,user2@example.com:githubuser2"
+    
+    Note: AccountIds are now resolved dynamically via Jira API
     """
     mapping_str = os.environ.get("USER_MAPPING", "")
     email_map = {}
-    accountid_map = {}
     
     if mapping_str:
         for pair in mapping_str.split(","):
             if ":" in pair:
-                # Use rsplit to split from the right (last colon) to handle accountIds with colons
-                # e.g., "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e:NuwanthaPiumal"
-                jira_id, github_user = pair.strip().rsplit(":", 1)
-                jira_id = jira_id.strip()
+                email, github_user = pair.strip().rsplit(":", 1)
+                email = email.strip().lower()
                 github_user = github_user.strip()
-                
-                # Check if it's an accountId (contains ':' in the ID itself) or email
-                if "@" in jira_id:
-                    email_map[jira_id.lower()] = github_user
-                else:
-                    # Assume it's an accountId
-                    accountid_map[jira_id] = github_user
+                email_map[email] = github_user
     
-    return {"email": email_map, "accountid": accountid_map}
+    return email_map
 
 
-def map_jira_user_to_github(jira_user_obj, user_mapping=None):
+def map_jira_user_to_github(jira_user_obj, user_mapping=None, jira_base_url=None, jira_credentials=None):
     """
-    Map a Jira user to a GitHub username.
+    Map a Jira user to a GitHub username using dynamic accountId lookup.
+    
+    Flow:
+    1. Try to find email in user_mapping
+    2. If found, dynamically lookup accountId from Jira API (cached in DynamoDB)
+    3. Verify accountId matches the user object
+    
     Returns tuple: (github_username or None, display_name)
     """
     if not jira_user_obj:
         return None, "Unassigned"
     
     display_name = jira_user_obj.get("displayName") or jira_user_obj.get("name") or "Unknown User"
+    jira_account_id = jira_user_obj.get("accountId", "")
     
-    if not user_mapping:
+    if not user_mapping or not jira_base_url or not jira_credentials:
         return None, display_name
     
-    # Try to map using accountId first (most reliable in Jira Cloud)
-    jira_account_id = jira_user_obj.get("accountId", "")
-    if jira_account_id and jira_account_id in user_mapping.get("accountid", {}):
-        github_user = user_mapping["accountid"][jira_account_id]
-        print(f"✓ Mapped via accountId: {jira_account_id} -> @{github_user}")
-        return github_user, display_name
-    
-    # Fallback to email mapping (if available)
-    email = jira_user_obj.get("emailAddress", "").lower()
-    if email and email in user_mapping.get("email", {}):
-        github_user = user_mapping["email"][email]
-        print(f"✓ Mapped via email: {email} -> @{github_user}")
-        return github_user, display_name
+    # Try each email in the mapping to find which one matches this accountId
+    for email, github_user in user_mapping.items():
+        # Dynamically lookup accountId for this email
+        lookup_account_id = get_accountid_from_email(email, jira_base_url, jira_credentials)
+        
+        if lookup_account_id and lookup_account_id == jira_account_id:
+            print(f"✓ Mapped user: {email} ({jira_account_id}) -> @{github_user}")
+            return github_user, display_name
     
     # No mapping found
+    print(f"⚠ No mapping found for accountId: {jira_account_id} ({display_name})")
     return None, display_name
 
 
@@ -837,15 +914,12 @@ def lambda_handler(event, context):
 
         # Build GitHub comment body and include a marker to prevent loops
         jira_author_obj = comment.get("author", {})
-        jira_author_email = jira_author_obj.get("emailAddress", "")
         jira_author_name = jira_author_obj.get("displayName") or jira_author_obj.get("name") or "Jira user"
         
-        # Try to map Jira user to GitHub user (user_mapping already fetched above)
-        github_author = None
-        if jira_author_email and user_mapping:
-            github_author = user_mapping.get('email', {}).get(jira_author_email.lower())
-        
+        # Try to map Jira user to GitHub user using dynamic lookup
         jira_base_url = os.environ.get("JIRA_BASE_URL", "")
+        github_author, _ = map_jira_user_to_github(jira_author_obj, user_mapping, jira_base_url, jira_credentials)
+        
         jira_url = f"{jira_base_url}/browse/{jira_key}"
         comment_created = comment.get("created", "")
         
@@ -1028,14 +1102,25 @@ def lambda_handler(event, context):
     priority_obj = fields.get("priority")
     priority = priority_obj.get("name") if priority_obj else "Medium"
 
+    # Prepare credentials and base URL (used for both user mapping and image handling)
+    jira_base_url = os.environ["JIRA_BASE_URL"]
+    secrets = get_secrets()
+    jira_credentials = {
+        'email': secrets.get('jira_email'),
+        'token': secrets.get('jira_api_token'),
+        'github_token': secrets.get('github_token'),
+        'github_owner': os.environ.get('GITHUB_OWNER'),
+        'github_repo': os.environ.get('GITHUB_REPO')
+    }
+    user_mapping = get_user_mapping()
+
     # Get reporter information
     reporter = fields.get("reporter")
-    _, reporter_name = map_jira_user_to_github(reporter, get_user_mapping())
+    _, reporter_name = map_jira_user_to_github(reporter, user_mapping, jira_base_url, jira_credentials)
     
     # Get assignee information
     assignee = fields.get("assignee")
-    user_mapping = get_user_mapping()
-    github_assignee, assignee_name = map_jira_user_to_github(assignee, user_mapping)
+    github_assignee, assignee_name = map_jira_user_to_github(assignee, user_mapping, jira_base_url, jira_credentials)
     
     # Debug logging for assignee
     print(f"Assignee object: {assignee}")
@@ -1108,20 +1193,9 @@ def lambda_handler(event, context):
         }
 
     # ---- Step 5: Build GitHub issue body
-    jira_base_url = os.environ["JIRA_BASE_URL"]
     jira_url = f"{jira_base_url}/browse/{jira_key}"
     
-    # Prepare Jira credentials for image downloading
-    secrets = get_secrets()
-    jira_credentials = {
-        'email': secrets.get('jira_email'),
-        'token': secrets.get('jira_api_token'),
-        'github_token': secrets.get('github_token'),
-        'github_owner': os.environ.get('GITHUB_OWNER'),
-        'github_repo': os.environ.get('GITHUB_REPO')
-    }
-    
-    # Parse description for ADF format, mentions, and images
+    # Parse description for ADF format, mentions, and images (reuse jira_credentials from above)
     description_text = parse_jira_adf_to_text(description, user_mapping, jira_base_url, jira_attachments, jira_credentials)
 
     # Build acceptance criteria section if available
