@@ -986,6 +986,11 @@ def lambda_handler(event, context):
             items = changelog.get("items", [])
             description_updated = any(item.get("field") == "description" for item in items)
             labels_updated = any(item.get("field") == "labels" for item in items)
+            summary_updated = any(item.get("field") == "summary" for item in items)
+            priority_updated = any(item.get("field") == "priority" for item in items)
+            
+            # Check for Acceptance Criteria updates (custom field)
+            ac_updated = any(item.get("field") == "customfield_10074" for item in items)
             
             # Handle description update
             if description_updated:
@@ -1126,6 +1131,145 @@ def lambda_handler(event, context):
                             print(f"Failed to update GitHub issue labels: {resp.status_code} - {resp.text}")
                     except Exception as e:
                         print(f"Error updating GitHub issue labels: {e}")
+            
+            # Handle title (summary) update
+            if summary_updated:
+                print(f"Title updated for {jira_key}, syncing to GitHub")
+                
+                # Get GitHub issue number
+                github_issue_number = sync_item.get("github_issue_number")
+                if not github_issue_number and sync_item.get("github_issue_url"):
+                    try:
+                        github_issue_number = int(sync_item.get("github_issue_url").rstrip('/').split('/')[-1])
+                    except Exception:
+                        pass
+                
+                if github_issue_number:
+                    try:
+                        # Get GitHub credentials
+                        token = get_github_token()
+                        owner = os.environ["GITHUB_OWNER"]
+                        repo = os.environ["GITHUB_REPO"]
+                        
+                        # Get updated title
+                        title = fields.get("summary", "No title provided")
+                        
+                        # Update GitHub issue title
+                        url = f"https://api.github.com/repos/{owner}/{repo}/issues/{github_issue_number}"
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Accept": "application/vnd.github.v3+json",
+                            "User-Agent": "jira-github-integration"
+                        }
+                        update_data = {"title": title}
+                        resp = requests.patch(url, json=update_data, headers=headers, timeout=30)
+                        
+                        if resp.status_code == 200:
+                            print(f"✓ Updated GitHub issue #{github_issue_number} title: {title}")
+                            return {"statusCode": 200, "body": json.dumps({"message": "Title synced to GitHub"})}
+                        else:
+                            print(f"Failed to update GitHub issue title: {resp.status_code} - {resp.text}")
+                    except Exception as e:
+                        print(f"Error updating GitHub issue title: {e}")
+            
+            # Handle priority or acceptance criteria updates (need to rebuild Jira Details section)
+            if priority_updated or ac_updated:
+                print(f"Priority or AC updated for {jira_key}, syncing to GitHub")
+                
+                # Get GitHub issue number
+                github_issue_number = sync_item.get("github_issue_number")
+                if not github_issue_number and sync_item.get("github_issue_url"):
+                    try:
+                        github_issue_number = int(sync_item.get("github_issue_url").rstrip('/').split('/')[-1])
+                    except Exception:
+                        pass
+                
+                if github_issue_number:
+                    try:
+                        # Get GitHub credentials
+                        token = get_github_token()
+                        owner = os.environ["GITHUB_OWNER"]
+                        repo = os.environ["GITHUB_REPO"]
+                        
+                        # Get current GitHub issue
+                        url = f"https://api.github.com/repos/{owner}/{repo}/issues/{github_issue_number}"
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Accept": "application/vnd.github.v3+json",
+                            "User-Agent": "jira-github-integration"
+                        }
+                        resp = requests.get(url, headers=headers, timeout=30)
+                        
+                        if resp.status_code == 200:
+                            current_issue = resp.json()
+                            current_body = current_issue.get("body", "")
+                            
+                            # Extract Description section
+                            description_section = ""
+                            if "## 📋 Description" in current_body:
+                                start_idx = current_body.index("## 📋 Description")
+                                end_idx = len(current_body)
+                                if "### 📌 Jira Details" in current_body[start_idx:]:
+                                    end_idx = start_idx + current_body[start_idx:].index("### 📌 Jira Details")
+                                description_section = current_body[start_idx:end_idx].rstrip()
+                            
+                            # Get updated priority and AC
+                            priority_obj = fields.get("priority")
+                            priority = priority_obj.get("name") if priority_obj else "Medium"
+                            
+                            # Get acceptance criteria
+                            acceptance_criteria = fields.get("customfield_10074")
+                            
+                            # Get reporter and assignee info
+                            jira_base_url = os.environ["JIRA_BASE_URL"]
+                            jira_url = f"{jira_base_url}/browse/{jira_key}"
+                            
+                            user_mapping = get_user_mapping()
+                            secrets = get_secrets()
+                            jira_credentials = {
+                                'email': secrets.get('jira_email'),
+                                'token': secrets.get('jira_api_token')
+                            }
+                            
+                            reporter = fields.get("reporter")
+                            _, reporter_name = map_jira_user_to_github(reporter, user_mapping, jira_base_url, jira_credentials)
+                            
+                            assignee = fields.get("assignee")
+                            github_assignee, assignee_name = map_jira_user_to_github(assignee, user_mapping, jira_base_url, jira_credentials)
+                            
+                            # Build assignee section
+                            assignee_section = f"**Assignee (Jira):** {assignee_name}"
+                            if github_assignee:
+                                assignee_section = f"**Assignee:** @{github_assignee} ({assignee_name})"
+                            
+                            # Rebuild Jira Details section
+                            jira_details_section = f"""### 📌 Jira Details
+- **Issue**: [{jira_key}]({jira_url})
+- **Reporter:** {reporter_name}
+- {assignee_section}
+- **Priority**: {priority}"""
+                            
+                            # Build acceptance criteria section
+                            ac_section = ""
+                            if acceptance_criteria:
+                                ac_section = f"\n\n## 🎯 Acceptance Criteria\n{acceptance_criteria}"
+                            
+                            # Rebuild full body
+                            new_body = description_section + "\n\n" + jira_details_section + ac_section
+                            
+                            # Update GitHub issue
+                            update_data = {"body": new_body}
+                            resp = requests.patch(url, json=update_data, headers=headers, timeout=30)
+                            
+                            if resp.status_code == 200:
+                                print(f"✓ Updated GitHub issue #{github_issue_number} priority/AC")
+                                return {"statusCode": 200, "body": json.dumps({"message": "Priority/AC synced to GitHub"})}
+                            else:
+                                print(f"Failed to update GitHub issue: {resp.status_code} - {resp.text}")
+                        else:
+                            print(f"Failed to fetch GitHub issue: {resp.status_code}")
+                    except Exception as e:
+                        print(f"Error updating GitHub issue priority/AC: {e}")
         
         # No updates to sync, skip
         print(f"⊘ No relevant updates for {jira_key}, skipping")
