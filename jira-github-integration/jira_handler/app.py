@@ -323,10 +323,22 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
     """Convert Jira ADF (Atlassian Document Format) or wiki markup to plain text with GitHub mentions and images.
     
     Args:
+        user_mapping: Tuple of (email_map, accountid_map) or dict for backward compatibility
         jira_credentials: Dict with 'email' and 'token' for downloading images
     """
     if not adf_content:
         return ""
+    
+    # Handle user_mapping format (tuple or dict)
+    email_map = {}
+    accountid_map = {}
+    if user_mapping:
+        if isinstance(user_mapping, dict):
+            # Old format for backward compatibility
+            email_map = user_mapping
+        else:
+            # New format: tuple of (email_map, accountid_map)
+            email_map, accountid_map = user_mapping
     
     # If it's already a string, it might be wiki markup - parse mentions and images
     if isinstance(adf_content, str):
@@ -340,16 +352,35 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
             if account_id.startswith("accountid:"):
                 account_id = account_id[10:]  # Remove "accountid:" (10 chars)
             
-            # Try to map accountId to GitHub username using dynamic lookup
-            if user_mapping and account_id and jira_base_url and jira_credentials:
+            # First, try direct accountId mapping
+            if account_id in accountid_map:
+                github_user = accountid_map[account_id]
+                return f"@{github_user}"
+            
+            # Try to map accountId to GitHub username using email lookup
+            if email_map and account_id and jira_base_url and jira_credentials:
                 # Try each email in mapping to find which one matches this accountId
-                for email, github_user in user_mapping.items():
+                for email, github_user in email_map.items():
                     lookup_account_id = get_accountid_from_email(email, jira_base_url, jira_credentials)
                     if lookup_account_id and lookup_account_id == account_id:
                         return f"@{github_user}"
             
-            # Fall back to a generic mention
-            return f"@user"
+            # Fall back to plain text without @ to avoid invalid GitHub mentions
+            # Try to get user display name from Jira API
+            if account_id and jira_base_url and jira_credentials:
+                try:
+                    url = f"{jira_base_url}/rest/api/3/user"
+                    params = {"accountId": account_id}
+                    auth = (jira_credentials.get("email"), jira_credentials.get("token"))
+                    resp = requests.get(url, params=params, auth=auth, timeout=10)
+                    if resp.status_code == 200:
+                        user_data = resp.json()
+                        display_name = user_data.get("displayName", "Unknown User")
+                        return display_name
+                except Exception as e:
+                    print(f"Error fetching user display name: {e}")
+            
+            return "Unknown User"
         
         # Replace all [~accountid:...] or [~username] patterns
         text = re.sub(r'\[~([^\]]+)\]', replace_mention, adf_content)
@@ -533,16 +564,21 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
                     account_id = attrs.get('id', '')  # e.g., "712020:bb0cbe76-91d7-4797-bc17-cb969d3ddb7e"
                     display_text = attrs.get('text', 'user')
                     
-                    # Try to map accountId to GitHub username using dynamic lookup
-                    if user_mapping and account_id and jira_base_url and jira_credentials:
+                    # First, try direct accountId mapping
+                    if account_id in accountid_map:
+                        github_user = accountid_map[account_id]
+                        return f"@{github_user}"
+                    
+                    # Try to map accountId to GitHub username using email lookup
+                    if email_map and account_id and jira_base_url and jira_credentials:
                         # Try each email in mapping to find which one matches this accountId
-                        for email, github_user in user_mapping.items():
+                        for email, github_user in email_map.items():
                             lookup_account_id = get_accountid_from_email(email, jira_base_url, jira_credentials)
                             if lookup_account_id and lookup_account_id == account_id:
                                 return f"@{github_user}"
                     
-                    # Fall back to display text
-                    return f"@{display_text}"
+                    # Fall back to display text WITHOUT @ to avoid invalid GitHub mentions
+                    return display_text
                 
                 # Hard break
                 if node_type == "hardBreak":
@@ -696,33 +732,45 @@ def update_github_comment(owner, repo, comment_id, body_text, token):
 def get_user_mapping():
     """
     Get user mapping from environment.
-    Format: email:github_username (comma-separated for multiple users)
-    Example: "user1@example.com:githubuser1,user2@example.com:githubuser2"
+    Format: email:github_username OR accountId:github_username (comma-separated for multiple users)
+    Example: "user1@example.com:githubuser1,712020:abc123:githubuser2"
     
-    Note: AccountIds are now resolved dynamically via Jira API
+    Returns two dicts: (email_map, accountid_map)
     """
     mapping_str = os.environ.get("USER_MAPPING", "")
     email_map = {}
+    accountid_map = {}
     
     if mapping_str:
         for pair in mapping_str.split(","):
             if ":" in pair:
-                email, github_user = pair.strip().rsplit(":", 1)
-                email = email.strip().lower()
-                github_user = github_user.strip()
-                email_map[email] = github_user
+                parts = pair.strip().split(":")
+                if len(parts) == 2:
+                    # Format: email:github_user OR short_accountid:github_user
+                    key, github_user = parts
+                    key = key.strip()
+                    github_user = github_user.strip()
+                    
+                    # Check if it's an email (contains @) or accountId
+                    if "@" in key:
+                        email_map[key.lower()] = github_user
+                    else:
+                        # Treat as accountId
+                        accountid_map[key] = github_user
+                elif len(parts) == 3:
+                    # Format: 712020:abc123:github_user (full Jira accountId format)
+                    account_id = f"{parts[0]}:{parts[1]}"
+                    github_user = parts[2].strip()
+                    accountid_map[account_id] = github_user
     
-    return email_map
+    return email_map, accountid_map
 
 
 def map_jira_user_to_github(jira_user_obj, user_mapping=None, jira_base_url=None, jira_credentials=None):
     """
-    Map a Jira user to a GitHub username using dynamic accountId lookup.
+    Map a Jira user to a GitHub username using email or direct accountId mapping.
     
-    Flow:
-    1. Try to find email in user_mapping
-    2. If found, dynamically lookup accountId from Jira API (cached in DynamoDB)
-    3. Verify accountId matches the user object
+    user_mapping should be a tuple of (email_map, accountid_map)
     
     Returns tuple: (github_username or None, display_name)
     """
@@ -731,21 +779,50 @@ def map_jira_user_to_github(jira_user_obj, user_mapping=None, jira_base_url=None
     
     display_name = jira_user_obj.get("displayName") or jira_user_obj.get("name") or "Unknown User"
     jira_account_id = jira_user_obj.get("accountId", "")
+    jira_email = jira_user_obj.get("emailAddress", "")
+    
+    print(f"DEBUG: Mapping Jira user - Display: {display_name}, AccountId: {jira_account_id}, Email: {jira_email}")
     
     if not user_mapping or not jira_base_url or not jira_credentials:
+        print(f"DEBUG: Missing mapping config")
         return None, display_name
     
-    # Try each email in the mapping to find which one matches this accountId
-    for email, github_user in user_mapping.items():
+    # user_mapping is now a tuple of (email_map, accountid_map)
+    if isinstance(user_mapping, dict):
+        # Old format for backward compatibility
+        email_map = user_mapping
+        accountid_map = {}
+    else:
+        email_map, accountid_map = user_mapping
+    
+    print(f"DEBUG: Available email mappings: {list(email_map.keys())}")
+    print(f"DEBUG: Available accountId mappings: {list(accountid_map.keys())}")
+    
+    # First, try direct accountId match (fastest and most reliable)
+    if jira_account_id in accountid_map:
+        github_user = accountid_map[jira_account_id]
+        print(f"✓ Direct accountId match: {jira_account_id} -> @{github_user}")
+        return github_user, display_name
+    
+    # Second, try direct email match if email is provided in the Jira user object
+    if jira_email and jira_email.lower() in email_map:
+        github_user = email_map[jira_email.lower()]
+        print(f"✓ Direct email match: {jira_email} -> @{github_user}")
+        return github_user, display_name
+    
+    # Third, try dynamic email lookup for each email in the mapping
+    for email, github_user in email_map.items():
+        print(f"DEBUG: Checking email mapping: {email} -> {github_user}")
         # Dynamically lookup accountId for this email
         lookup_account_id = get_accountid_from_email(email, jira_base_url, jira_credentials)
+        print(f"DEBUG: Looked up accountId for {email}: {lookup_account_id}")
         
         if lookup_account_id and lookup_account_id == jira_account_id:
-            print(f"✓ Mapped user: {email} ({jira_account_id}) -> @{github_user}")
+            print(f"✓ Mapped user via email lookup: {email} ({jira_account_id}) -> @{github_user}")
             return github_user, display_name
     
     # No mapping found
-    print(f"⚠ No mapping found for accountId: {jira_account_id} ({display_name})")
+    print(f"⚠ No mapping found for accountId: {jira_account_id} ({display_name}), Email: {jira_email}")
     return None, display_name
 
 
