@@ -1657,6 +1657,10 @@ def lambda_handler(event, context):
     acceptance_criteria = None
     acceptance_criteria_raw = None
     
+    print(f"DEBUG AC: Checking for Acceptance Criteria...")
+    print(f"DEBUG AC: Epic Link field: {fields.get('customfield_10014')}")  # Common epic link field
+    print(f"DEBUG AC: Parent field: {fields.get('parent')}")
+    
     # First, check the known AC field for this Jira instance
     if fields.get("customfield_10074"):
         acceptance_criteria_raw = fields.get("customfield_10074")
@@ -1675,6 +1679,35 @@ def lambda_handler(event, context):
             print("Using AC as plain text")
             acceptance_criteria = acceptance_criteria_raw
             print(f"AC Text (first 200 chars): {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
+    else:
+        print(f"DEBUG AC: customfield_10074 not found or empty")
+        print(f"DEBUG AC: customfield_10074 value: {fields.get('customfield_10074')}")
+        
+        # If AC is empty and there's a parent/epic, fetch from Jira API directly
+        has_parent = fields.get('parent') or fields.get('customfield_10014')
+        if has_parent:
+            print(f"DEBUG AC: Task has parent/epic, fetching full issue from Jira API...")
+            try:
+                url = f"{jira_base_url}/rest/api/3/issue/{jira_key}"
+                auth = (jira_credentials.get('email'), jira_credentials.get('token'))
+                resp = requests.get(url, auth=auth, timeout=10)
+                if resp.status_code == 200:
+                    full_issue = resp.json()
+                    full_fields = full_issue.get('fields', {})
+                    acceptance_criteria_raw = full_fields.get('customfield_10074')
+                    if acceptance_criteria_raw:
+                        print(f"DEBUG AC: Found AC in API response!")
+                        if isinstance(acceptance_criteria_raw, dict):
+                            acceptance_criteria = parse_jira_adf_to_text(acceptance_criteria_raw, user_mapping, jira_base_url, jira_attachments, jira_credentials)
+                        else:
+                            acceptance_criteria = acceptance_criteria_raw
+                        print(f"DEBUG AC: Fetched AC (first 200 chars): {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
+                    else:
+                        print(f"DEBUG AC: AC still empty in API response")
+                else:
+                    print(f"DEBUG AC: Failed to fetch from API: {resp.status_code}")
+            except Exception as e:
+                print(f"DEBUG AC: Error fetching from API: {e}")
     
     # If not found, try common custom field patterns and names
     if not acceptance_criteria:
@@ -1745,7 +1778,8 @@ def lambda_handler(event, context):
 - **Issue**: [{jira_key}]({jira_url})
 - **Reporter:** {reporter_name}
 - {assignee_section}
-- **Priority**: {priority}{ac_section}
+- **Priority**: {priority}
+{ac_section}
 """
 
     github_labels = map_labels(labels)
