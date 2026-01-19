@@ -8,6 +8,22 @@ Globals:
     MemorySize: 256
 
 Resources:
+  # DynamoDB Table for duplicate prevention
+  JiraGithubSyncTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: jira-github-sync-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jira_issue_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jira_issue_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
   JiraWebhookFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -18,14 +34,25 @@ Resources:
           GITHUB_OWNER: Nuwantha57
           GITHUB_REPO: jira-sync-test
           JIRA_BASE_URL: https://nuwanthapiumal57.atlassian.net
+          JIRA_EMAIL: nuwanthapiumal57@gmail.com
           TARGET_LABEL: sync-to-github
           SECRET_NAME: jira-github-integration
+          DYNAMODB_TABLE: jira-github-sync-state
+          USER_MAPPING: "nuwanthapiumal57@gmail.com:NuwanthaPiumal,712020:8dcd81ff-57c6-432c-88aa-bded8d0e6c10:Nuwantha57"  # Format: email:github_user OR accountId:github_user (comma-separated)
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
-            SecretArn: arn:aws:secretsmanager:*:*:secret:jira-github-integration*
+            SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*
+        - DynamoDBCrudPolicy:
+            TableName: !Ref JiraGithubSyncTable
       Events:
         JiraWebhook:
           Type: Api
           Properties:
             Path: /webhook
             Method: post
+
+Outputs:
+  JiraWebhookUrl:
+    Description: "API Gateway endpoint URL for Jira webhook"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook"
+
