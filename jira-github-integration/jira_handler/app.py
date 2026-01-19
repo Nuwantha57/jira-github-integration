@@ -1060,6 +1060,7 @@ def lambda_handler(event, context):
             labels_updated = any(item.get("field") == "labels" for item in items)
             summary_updated = any(item.get("field") == "summary" for item in items)
             priority_updated = any(item.get("field") == "priority" for item in items)
+            assignee_updated = any(item.get("field") == "assignee" for item in items)
             
             # Check for Acceptance Criteria updates (custom field)
             ac_updated = any(item.get("field") == "customfield_10074" for item in items)
@@ -1243,6 +1244,130 @@ def lambda_handler(event, context):
                             print(f"Failed to update GitHub issue title: {resp.status_code} - {resp.text}")
                     except Exception as e:
                         print(f"Error updating GitHub issue title: {e}")
+            
+            # Handle assignee update
+            if assignee_updated:
+                print(f"Assignee updated for {jira_key}, syncing to GitHub")
+                
+                # Get GitHub issue number
+                github_issue_number = sync_item.get("github_issue_number")
+                if not github_issue_number and sync_item.get("github_issue_url"):
+                    try:
+                        github_issue_number = int(sync_item.get("github_issue_url").rstrip('/').split('/')[-1])
+                    except Exception:
+                        pass
+                
+                if github_issue_number:
+                    try:
+                        # Get GitHub credentials
+                        token = get_github_token()
+                        owner = os.environ["GITHUB_OWNER"]
+                        repo = os.environ["GITHUB_REPO"]
+                        
+                        # Get user mapping and credentials
+                        user_mapping = get_user_mapping()
+                        jira_base_url = os.environ.get("JIRA_BASE_URL", "")
+                        secrets = get_secrets()
+                        jira_credentials = {
+                            'email': secrets.get('jira_email'),
+                            'token': secrets.get('jira_api_token'),
+                            'github_token': secrets.get('github_token'),
+                            'github_owner': os.environ.get('GITHUB_OWNER'),
+                            'github_repo': os.environ.get('GITHUB_REPO')
+                        }
+                        
+                        # Get updated assignee from Jira
+                        assignee = fields.get("assignee")
+                        github_assignee, assignee_name = map_jira_user_to_github(assignee, user_mapping, jira_base_url, jira_credentials)
+                        
+                        # Get current GitHub issue to update the body
+                        url = f"https://api.github.com/repos/{owner}/{repo}/issues/{github_issue_number}"
+                        headers = {
+                            "Authorization": f"Bearer {token}",
+                            "Accept": "application/vnd.github.v3+json",
+                            "User-Agent": "jira-github-integration"
+                        }
+                        
+                        resp = requests.get(url, headers=headers, timeout=30)
+                        
+                        if resp.status_code == 200:
+                            current_issue = resp.json()
+                            current_body = current_issue.get("body", "")
+                            
+                            # Extract sections
+                            description_section = ""
+                            if "## 📋 Description" in current_body:
+                                start_idx = current_body.index("## 📋 Description")
+                                end_idx = len(current_body)
+                                if "### 📌 Jira Details" in current_body[start_idx:]:
+                                    end_idx = start_idx + current_body[start_idx:].index("### 📌 Jira Details")
+                                description_section = current_body[start_idx:end_idx].rstrip()
+                            
+                            acceptance_criteria_section = ""
+                            if "## 🎯 Acceptance Criteria" in current_body:
+                                start_idx = current_body.index("## 🎯 Acceptance Criteria")
+                                acceptance_criteria_section = current_body[start_idx:].rstrip()
+                            
+                            # Get other Jira details to rebuild the section
+                            priority_obj = fields.get("priority")
+                            priority = priority_obj.get("name") if priority_obj else "Medium"
+                            
+                            reporter = fields.get("reporter")
+                            _, reporter_name = map_jira_user_to_github(reporter, user_mapping, jira_base_url, jira_credentials)
+                            
+                            jira_url = f"{jira_base_url}/browse/{jira_key}"
+                            
+                            # Build assignee section with updated assignee
+                            assignee_section = f"**Assignee (Jira):** {assignee_name}"
+                            if github_assignee:
+                                assignee_section = f"**Assignee:** @{github_assignee} ({assignee_name})"
+                            
+                            # Rebuild Jira Details section
+                            jira_details_section = f"""### 📌 Jira Details
+- **Issue Key:** [{jira_key}]({jira_url})
+- **Priority:** {priority}
+- **Reporter:** {reporter_name}
+- {assignee_section}"""
+                            
+                            # Rebuild full body
+                            new_body = ""
+                            if description_section:
+                                new_body += description_section + "\n\n"
+                            new_body += jira_details_section
+                            if acceptance_criteria_section:
+                                new_body += "\n\n" + acceptance_criteria_section
+                            
+                            # Update both assignee field and body
+                            update_data = {"body": new_body}
+                            if github_assignee:
+                                # Verify the user exists in GitHub before assigning
+                                if verify_github_user_exists(github_assignee, token, owner, repo):
+                                    update_data["assignees"] = [github_assignee]
+                                    print(f"Assigning to GitHub user: {github_assignee}")
+                                else:
+                                    print(f"GitHub user {github_assignee} doesn't have access to repo, cannot assign")
+                                    update_data["assignees"] = []
+                            else:
+                                # No mapped GitHub user or unassigned in Jira - clear assignee
+                                update_data["assignees"] = []
+                                print(f"Clearing GitHub assignee (Jira assignee: {assignee_name})")
+                            
+                            resp = requests.patch(url, json=update_data, headers=headers, timeout=30)
+                            
+                            if resp.status_code == 200:
+                                if github_assignee:
+                                    print(f"✓ Updated GitHub issue #{github_issue_number} assignee to @{github_assignee} (field and body)")
+                                else:
+                                    print(f"✓ Cleared GitHub issue #{github_issue_number} assignee (field and body)")
+                                return {"statusCode": 200, "body": json.dumps({"message": "Assignee synced to GitHub"})}
+                            else:
+                                print(f"Failed to update GitHub issue assignee: {resp.status_code} - {resp.text}")
+                        else:
+                            print(f"Failed to fetch GitHub issue: {resp.status_code}")
+                    except Exception as e:
+                        print(f"Error updating GitHub issue assignee: {e}")
+                        import traceback
+                        traceback.print_exc()
             
             # Handle priority or acceptance criteria updates (need to rebuild Jira Details section)
             if priority_updated or ac_updated:
