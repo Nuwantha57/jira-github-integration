@@ -234,6 +234,28 @@ def add_comment_mapping(jira_key, jira_comment_id, github_comment_id):
     table_name = os.environ.get("DYNAMODB_TABLE", "jira-github-sync-state")
     table = dynamodb.Table(table_name)
     try:
+        # First, try to get the existing item to check if comments map exists
+        response = table.get_item(Key={"jira_issue_key": jira_key})
+        item = response.get("Item", {})
+        
+        # Check if comments map exists
+        if "comments" not in item:
+            # Initialize the comments map structure first
+            update_expr = "SET comments = :empty_map"
+            expr_vals = {
+                ":empty_map": {
+                    "jira_to_github": {},
+                    "github_to_jira": {}
+                }
+            }
+            table.update_item(
+                Key={"jira_issue_key": jira_key},
+                UpdateExpression=update_expr,
+                ExpressionAttributeValues=expr_vals
+            )
+            print(f"✓ Initialized comments map for {jira_key}")
+        
+        # Now add the mapping
         # Store both directions for easy lookup
         # comments.jira_to_github: jira_comment_id -> github_comment_id
         # comments.github_to_jira: github_comment_id -> jira_comment_id
@@ -255,6 +277,8 @@ def add_comment_mapping(jira_key, jira_comment_id, github_comment_id):
         print(f"✓ Mapped Jira comment {jira_comment_id} <-> GitHub comment {github_comment_id}")
     except ClientError as e:
         print(f"DynamoDB update_item error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def is_comment_already_synced(jira_key, jira_comment_id=None, github_comment_id=None):
@@ -647,6 +671,25 @@ def post_github_comment(owner, repo, issue_number, body_text, token):
         return None
 
 
+def update_github_comment(owner, repo, comment_id, body_text, token):
+    """Update an existing GitHub comment."""
+    url = f"https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}"
+    try:
+        resp = requests.patch(
+            url,
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json"
+            },
+            json={"body": body_text},
+            timeout=10
+        )
+        return resp
+    except requests.exceptions.RequestException as e:
+        print(f"GitHub comment update request failed: {e}")
+        return None
+
+
 # -------------------------------
 # User mapping helpers
 # -------------------------------
@@ -856,6 +899,7 @@ def lambda_handler(event, context):
     if body.get("comment"):
         comment = body.get("comment")
         jira_comment_id = str(comment.get("id"))
+        webhook_event = body.get("webhookEvent", "")
         
         # Get user mapping for mention conversion
         user_mapping = get_user_mapping()
@@ -877,7 +921,7 @@ def lambda_handler(event, context):
         }
         comment_body = parse_jira_adf_to_text(comment_body_raw, user_mapping, jira_base_url, jira_attachments, jira_credentials)
         
-        print(f"Processing Jira comment {jira_comment_id}")
+        print(f"Processing Jira comment {jira_comment_id} - Event: {webhook_event}")
         print(f"Comment body preview: {comment_body[:100]}...")
 
         if not comment_body.strip():
@@ -888,11 +932,6 @@ def lambda_handler(event, context):
         if "<!-- jira-sync:" in comment_body or "jira-sync: github_comment_id" in comment_body:
             print(f"Loop prevention: Jira comment {jira_comment_id} contains sync marker, skipping")
             return {"statusCode": 200, "body": json.dumps({"message": "Loop prevention - synced comment"})}
-
-        # Check if this comment has already been synced
-        if is_comment_already_synced(jira_key, jira_comment_id=jira_comment_id):
-            print(f"Comment {jira_comment_id} already synced, skipping")
-            return {"statusCode": 200, "body": json.dumps({"message": "Comment already synced"})}
 
         # Find GitHub issue mapping for this Jira issue
         sync_item = get_sync_item(jira_key)
@@ -940,6 +979,7 @@ def lambda_handler(event, context):
             author_str = jira_author_name
         
         marker = f"<!-- jira-sync: jira_comment_id={jira_comment_id} -->"
+        
         github_comment_body = f"""### 💬 Comment from Jira
 
 **Author:** {author_str}{timestamp_str}
@@ -951,11 +991,41 @@ def lambda_handler(event, context):
 
 {marker}"""
 
-        # Post comment to GitHub
+        # Post or update comment on GitHub
         try:
             token = get_github_token()
             owner = os.environ["GITHUB_OWNER"]
             repo = os.environ["GITHUB_REPO"]
+            
+            # Check if this comment already has a GitHub mapping - if so, UPDATE instead of creating new
+            existing_github_comment_id = None
+            if sync_item:
+                comments = sync_item.get("comments", {})
+                print(f"DEBUG: sync_item comments structure: {comments}")
+                jira_to_github = comments.get("jira_to_github", {})
+                print(f"DEBUG: jira_to_github mapping: {jira_to_github}")
+                print(f"DEBUG: Looking for jira_comment_id: {jira_comment_id} (type: {type(jira_comment_id)})")
+                existing_github_comment_id = jira_to_github.get(str(jira_comment_id))
+                print(f"DEBUG: Found existing_github_comment_id: {existing_github_comment_id}")
+            else:
+                print(f"DEBUG: No sync_item found for {jira_key}")
+            
+            # If mapping exists, this is an update - update the existing GitHub comment
+            if existing_github_comment_id:
+                print(f"Found existing GitHub comment {existing_github_comment_id}, updating it")
+                resp = update_github_comment(owner, repo, existing_github_comment_id, github_comment_body, token)
+                
+                if resp is None:
+                    return {"statusCode": 502, "body": "GitHub comment update request failed"}
+                
+                if resp.status_code != 200:
+                    print(f"Failed to update GitHub comment {resp.status_code}: {resp.text}")
+                    return {"statusCode": 502, "body": json.dumps({"error": "Failed to update GitHub comment", "details": resp.text})}
+                
+                print(f"✓ Successfully updated GitHub comment {existing_github_comment_id}")
+                return {"statusCode": 200, "body": json.dumps({"message": "Comment updated on GitHub", "github_comment_id": existing_github_comment_id})}
+            
+            # No existing mapping - create new comment
             resp = post_github_comment(owner, repo, github_issue_number, github_comment_body, token)
             if resp is None:
                 return {"statusCode": 502, "body": "GitHub comment request failed"}
