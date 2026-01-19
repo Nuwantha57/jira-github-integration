@@ -352,9 +352,12 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
             if account_id.startswith("accountid:"):
                 account_id = account_id[10:]  # Remove "accountid:" (10 chars)
             
+            print(f"DEBUG mention: account_id={account_id}, has accountid_map={bool(accountid_map)}, has email_map={bool(email_map)}")
+            
             # First, try direct accountId mapping
             if account_id in accountid_map:
                 github_user = accountid_map[account_id]
+                print(f"DEBUG mention: Direct accountId match -> @{github_user}")
                 return f"@{github_user}"
             
             # Try to map accountId to GitHub username using email lookup
@@ -363,9 +366,10 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
                 for email, github_user in email_map.items():
                     lookup_account_id = get_accountid_from_email(email, jira_base_url, jira_credentials)
                     if lookup_account_id and lookup_account_id == account_id:
+                        print(f"DEBUG mention: Email lookup match -> @{github_user}")
                         return f"@{github_user}"
             
-            # Fall back to plain text without @ to avoid invalid GitHub mentions
+            # Fall back to @ mention with display name for visual consistency
             # Try to get user display name from Jira API
             if account_id and jira_base_url and jira_credentials:
                 try:
@@ -376,11 +380,13 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
                     if resp.status_code == 200:
                         user_data = resp.json()
                         display_name = user_data.get("displayName", "Unknown User")
-                        return display_name
+                        print(f"DEBUG mention: Fallback to display name -> @{display_name}")
+                        return f"@{display_name}"
                 except Exception as e:
                     print(f"Error fetching user display name: {e}")
             
-            return "Unknown User"
+            print(f"DEBUG mention: Unknown user fallback")
+            return "@Unknown-User"
         
         # Replace all [~accountid:...] or [~username] patterns
         text = re.sub(r'\[~([^\]]+)\]', replace_mention, adf_content)
@@ -577,8 +583,8 @@ def parse_jira_adf_to_text(adf_content, user_mapping=None, jira_base_url=None, j
                             if lookup_account_id and lookup_account_id == account_id:
                                 return f"@{github_user}"
                     
-                    # Fall back to display text WITHOUT @ to avoid invalid GitHub mentions
-                    return display_text
+                    # Fall back to @ mention with display text for visual consistency
+                    return f"@{display_text}"
                 
                 # Hard break
                 if node_type == "hardBreak":
