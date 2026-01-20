@@ -1,13 +1,26 @@
 # Jira-GitHub Integration
 
-Bidirectional integration that syncs Jira issues and comments to GitHub issues and comments.
+Serverless integration that automatically syncs Jira issues and comments to GitHub using AWS Lambda, API Gateway, and DynamoDB.
+
+**Sync Direction:** Jira → GitHub (one-way)
+
+## 🚀 Quick Start
+
+**New to this project?** Start here:
+1. � **[INDEX.md](INDEX.md)** - Complete documentation index (START HERE!)
+2. 📖 **[QUICKSTART.md](QUICKSTART.md)** - 5-minute setup guide
+3. 📚 **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Complete 50-page reference
+4. 🐛 **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Solutions to 50+ common issues
+5. 📋 **[CONFIGURATION_TEMPLATE.md](CONFIGURATION_TEMPLATE.md)** - Document your deployment
+6. 🎁 **[CLIENT_HANDOVER.md](CLIENT_HANDOVER.md)** - Executive summary & overview
+
+**Total Documentation:** 100+ pages covering every aspect of deployment and operation.
 
 ## Features
 
 - ✅ Sync Jira issues to GitHub issues with the `sync-to-github` label
-- ✅ Bidirectional comment sync (Jira ↔ GitHub)
+- ✅ Sync Jira comments to GitHub (one-way)
 - ✅ User mapping from Jira to GitHub
-- ✅ Loop prevention with sync markers
 - ✅ DynamoDB-based duplicate prevention
 - ✅ Acceptance Criteria support
 - ✅ Label mapping
@@ -16,9 +29,8 @@ Bidirectional integration that syncs Jira issues and comments to GitHub issues a
 ## Architecture
 
 - **JiraWebhookFunction**: Handles Jira webhooks for issue creation and comment sync to GitHub
-- **GitHubWebhookFunction**: Handles GitHub webhooks for comment sync to Jira  
 - **DynamoDB**: Stores sync state and comment mappings
-- **API Gateway**: Exposes webhook endpoints
+- **API Gateway**: Exposes webhook endpoint for Jira webhooks
 
 ## User Mapping
 
@@ -54,48 +66,64 @@ Format: `jira_email:github_username,jira_email2:github_username2`
 - ⚠️ Mapped + Not Found: "Author: Full Name"
 - ⚠️ Not Mapped: "Author: Full Name"
 
-## Setup
+## 📦 Project Structure
+
+```
+jira-github-integration/
+├── README.md                      # This file - project overview
+├── QUICKSTART.md                  # 5-minute setup guide
+├── DEPLOYMENT_GUIDE.md            # Complete deployment documentation
+├── CONFIGURATION_TEMPLATE.md      # Configuration worksheet
+├── template.yaml                  # AWS SAM template (your config)
+├── template.yaml.example          # Template with instructions
+├── samconfig.toml                 # SAM CLI configuration
+├── events/
+│   └── event.json                # Sample Jira webhook payload
+├── jira_handler/
+│   ├── app.py                    # Main Lambda function code
+│   ├── requirements.txt          # Python dependencies
+│   └── __init__.py
+└── tests/
+    ├── unit/                     # Unit tests
+    └── integration/              # Integration tests
+```
+
+## 🔧 Setup & Deployment
 
 ### Prerequisites
 
-- AWS SAM CLI
-- Python 3.13
-- GitHub Personal Access Token
-- Jira API Token
+- ✅ AWS CLI installed and configured
+- ✅ AWS SAM CLI (v1.100.0+)
+- ✅ Python 3.13
+- ✅ Docker Desktop
+- ✅ GitHub Personal Access Token (with `repo` scope)
+- ✅ Jira API Token
 
-## Deploy the sample application
-
-The Serverless Application Model Command Line Interface (SAM CLI) is an extension of the AWS CLI that adds functionality for building and testing Lambda applications. It uses Docker to run your functions in an Amazon Linux environment that matches Lambda. It can also emulate your application's build environment and API.
-
-To use the SAM CLI, you need the following tools.
-
-* SAM CLI - [Install the SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/serverless-sam-cli-install.html)
-* [Python 3 installed](https://www.python.org/downloads/)
-* Docker - [Install Docker community edition](https://hub.docker.com/search/?type=edition&offering=community)
-
-To build and deploy your application for the first time, run the following in your shell:
+### Quick Deployment
 
 ```bash
+# 1. Copy and configure template
+cp template.yaml.example template.yaml
+# Edit template.yaml with your GitHub/Jira settings
+
+# 2. Create AWS secret
+aws secretsmanager create-secret \
+    --name jira-github-integration \
+    --secret-string '{"github_token":"YOUR_TOKEN","jira_api_token":"YOUR_TOKEN"}'
+
+# 3. Build and deploy
 sam build --use-container
 sam deploy --guided
 ```
 
-The first command will build the source of your application. The second command will package and deploy your application to AWS, with a series of prompts:
-
-* **Stack Name**: The name of the stack to deploy to CloudFormation. This should be unique to your account and region, and a good starting point would be something matching your project name.
-* **AWS Region**: The AWS region you want to deploy your app to.
-* **Confirm changes before deploy**: If set to yes, any change sets will be shown to you before execution for manual review. If set to no, the AWS SAM CLI will automatically deploy application changes.
-* **Allow SAM CLI IAM role creation**: Many AWS SAM templates, including this example, create AWS IAM roles required for the AWS Lambda function(s) included to access AWS services. By default, these are scoped down to minimum required permissions. To deploy an AWS CloudFormation stack which creates or modifies IAM roles, the `CAPABILITY_IAM` value for `capabilities` must be provided. If permission isn't provided through this prompt, to deploy this example you must explicitly pass `--capabilities CAPABILITY_IAM` to the `sam deploy` command.
-* **Save arguments to samconfig.toml**: If set to yes, your choices will be saved to a configuration file inside the project, so that in the future you can just re-run `sam deploy` without parameters to deploy changes to your application.
-
-You can find your API Gateway Endpoint URL in the output values displayed after deployment.
+**For detailed step-by-step instructions, see [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)**
 
 ## Use the SAM CLI to build and test locally
 
-Build your application with the `sam build --use-container` command.
+Build your application with the `sam build --use-container` command:
 
 ```bash
-jira-github-integration$ sam build --use-container
+sam build --use-container
 ```
 
 The SAM CLI installs dependencies defined in `hello_world/requirements.txt`, creates a deployment package, and saves it in the `.aws-sam/build` folder.
