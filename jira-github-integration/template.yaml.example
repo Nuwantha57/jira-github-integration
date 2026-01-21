@@ -59,6 +59,13 @@ Resources:
           TARGET_LABEL: sync-to-github                      # Jira label that triggers sync
           
           # ==========================================
+          # CUSTOM FIELD CONFIGURATION
+          # ==========================================
+          # IMPORTANT: Acceptance Criteria field ID is unique to each Jira instance
+          # Find your field ID using CUSTOM_FIELD_SETUP.md guide
+          ACCEPTANCE_CRITERIA_FIELD: "customfield_10074"    # Your Jira AC field ID
+          
+          # ==========================================
           # AWS RESOURCES (Keep defaults unless customizing)
           # ==========================================
           SECRET_NAME: jira-github-integration              # AWS Secrets Manager secret name

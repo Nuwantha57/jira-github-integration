@@ -31,21 +31,27 @@ Start with the guide that matches your needs:
 
 ### 🔧 For Configuration & Customization
 
-3. **[CONFIGURATION_TEMPLATE.md](CONFIGURATION_TEMPLATE.md)** - Configuration worksheet
+3. **[CUSTOM_FIELD_SETUP.md](CUSTOM_FIELD_SETUP.md)** - **CRITICAL: Custom field configuration**
+   - Find your Jira Acceptance Criteria field ID
+   - Three methods to detect custom fields
+   - Field ID configuration guide
+   - Testing and troubleshooting
+
+4. **[CONFIGURATION_TEMPLATE.md](CONFIGURATION_TEMPLATE.md)** - Configuration worksheet
    - Document your deployment settings
    - Track user mappings
    - Testing checklist
    - Maintenance schedule
    - Support contacts
 
-4. **[template.yaml.example](template.yaml.example)** - Configuration template
+5. **[template.yaml.example](template.yaml.example)** - Configuration template
    - AWS SAM template with detailed comments
    - Environment variable descriptions
    - Deployment instructions
 
 ### 🐛 For Troubleshooting
 
-5. **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Complete troubleshooting guide
+6. **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Complete troubleshooting guide
    - Diagnostic tools
    - Common issues and solutions
    - Error message reference
@@ -54,7 +60,7 @@ Start with the guide that matches your needs:
 
 ### 📖 For Understanding the Project
 
-6. **[README.md](README.md)** - Project overview
+7. **[README.md](README.md)** - Project overview
    - Feature summary
    - Architecture overview
    - User mapping explanation
@@ -67,6 +73,10 @@ Start with the guide that matches your needs:
 ### "I need to deploy this for the first time"
 → Start with [QUICKSTART.md](QUICKSTART.md)  
 → Then read [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) sections 1-7
+
+### "Acceptance Criteria isn't syncing"
+→ **[CUSTOM_FIELD_SETUP.md](CUSTOM_FIELD_SETUP.md)** - Find your field ID  
+→ [TROUBLESHOOTING.md - Custom Fields](TROUBLESHOOTING.md)
 
 ### "I need to configure user mappings"
 → [DEPLOYMENT_GUIDE.md - User Mapping](DEPLOYMENT_GUIDE.md#user-mapping)  

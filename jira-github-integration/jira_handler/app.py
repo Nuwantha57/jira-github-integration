@@ -12,6 +12,10 @@ from datetime import datetime
 secrets_client = boto3.client("secretsmanager")
 dynamodb = boto3.resource("dynamodb")
 
+# Configuration: Acceptance Criteria Custom Field
+# Each Jira instance has different custom field IDs - configure this for your Jira
+ACCEPTANCE_CRITERIA_FIELD = os.environ.get("ACCEPTANCE_CRITERIA_FIELD", "customfield_10074")
+
 # -------------------------------
 # Secrets
 # -------------------------------
@@ -1146,7 +1150,7 @@ def lambda_handler(event, context):
             assignee_updated = any(item.get("field") == "assignee" for item in items)
             
             # Check for Acceptance Criteria updates (custom field)
-            ac_updated = any(item.get("field") == "customfield_10074" for item in items)
+            ac_updated = any(item.get("field") == ACCEPTANCE_CRITERIA_FIELD for item in items)
             
             # Handle description update
             if description_updated:
@@ -1214,12 +1218,37 @@ def lambda_handler(event, context):
                                     end_idx = start_idx + current_body[start_idx:].index("## 🎯 Acceptance Criteria")
                                 jira_details_section = current_body[start_idx:end_idx].rstrip()
                             
-                            # Extract Acceptance Criteria section
-                            if "## 🎯 Acceptance Criteria" in current_body:
-                                start_idx = current_body.index("## 🎯 Acceptance Criteria")
-                                # Find where it ends
-                                end_idx = len(current_body)
-                                acceptance_criteria_section = current_body[start_idx:end_idx].rstrip()
+                            # Check if AC was also updated in this same webhook
+                            changelog = body.get("changelog", {})
+                            items = changelog.get("items", [])
+                            ac_also_updated = any(item.get("field") == ACCEPTANCE_CRITERIA_FIELD for item in items)
+                            
+                            # Extract or rebuild Acceptance Criteria section
+                            if ac_also_updated:
+                                # AC was updated, fetch fresh from Jira
+                                print(f"AC also updated in same event, fetching fresh AC from Jira")
+                                acceptance_criteria_raw = fields.get(ACCEPTANCE_CRITERIA_FIELD)
+                                acceptance_criteria = None
+                                if acceptance_criteria_raw:
+                                    if isinstance(acceptance_criteria_raw, dict):
+                                        acceptance_criteria = parse_jira_adf_to_text(acceptance_criteria_raw, user_mapping, jira_base_url, jira_attachments, jira_credentials)
+                                    else:
+                                        acceptance_criteria = acceptance_criteria_raw
+                                
+                                if acceptance_criteria:
+                                    acceptance_criteria_section = f"## 🎯 Acceptance Criteria\n{acceptance_criteria}"
+                                    print(f"✓ Rebuilt AC section from fresh Jira data")
+                                else:
+                                    acceptance_criteria_section = ""  # Clear if now empty
+                                    print("⚠ AC was updated but is now empty")
+                            else:
+                                # AC not updated, preserve existing
+                                if "## 🎯 Acceptance Criteria" in current_body:
+                                    start_idx = current_body.index("## 🎯 Acceptance Criteria")
+                                    # Find where it ends
+                                    end_idx = len(current_body)
+                                    acceptance_criteria_section = current_body[start_idx:end_idx].rstrip()
+                                    print(f"Preserving existing AC section")
                             
                             # Rebuild body with updated description while preserving other sections
                             new_body = f"""## 📋 Description
@@ -1227,10 +1256,10 @@ def lambda_handler(event, context):
 
 """
                             if jira_details_section:
-                                new_body += jira_details_section + "\n\n"
+                                new_body += jira_details_section
                             
                             if acceptance_criteria_section:
-                                new_body += acceptance_criteria_section
+                                new_body += "\n\n" + acceptance_criteria_section
                             
                             # Update GitHub issue
                             update_data = {"body": new_body}
@@ -1384,6 +1413,9 @@ def lambda_handler(event, context):
                                 end_idx = len(current_body)
                                 if "### 📌 Jira Details" in current_body[start_idx:]:
                                     end_idx = start_idx + current_body[start_idx:].index("### 📌 Jira Details")
+                                elif "## 🎯 Acceptance Criteria" in current_body[start_idx:]:
+                                    # Strip any existing AC that might be stuck to the description section
+                                    end_idx = start_idx + current_body[start_idx:].index("## 🎯 Acceptance Criteria")
                                 description_section = current_body[start_idx:end_idx].rstrip()
                             
                             acceptance_criteria_section = ""
@@ -1453,7 +1485,7 @@ def lambda_handler(event, context):
                         traceback.print_exc()
             
             # Handle priority or acceptance criteria updates (need to rebuild Jira Details section)
-            if priority_updated or ac_updated:
+            if priority_updated or ac_updated or fields.get(ACCEPTANCE_CRITERIA_FIELD):
                 print(f"Priority or AC updated for {jira_key}, syncing to GitHub")
                 
                 # Get GitHub issue number
@@ -1498,6 +1530,7 @@ def lambda_handler(event, context):
                             if "## 🎯 Acceptance Criteria" in current_body:
                                 start_idx = current_body.index("## 🎯 Acceptance Criteria")
                                 existing_ac_section = current_body[start_idx:].rstrip()
+                                print(f"Extracted existing AC section: {len(existing_ac_section)} chars")
                             
                             # Get updated priority
                             priority_obj = fields.get("priority")
@@ -1517,37 +1550,62 @@ def lambda_handler(event, context):
                                 'github_repo': os.environ.get('GITHUB_REPO')
                             }
                             
-                            # Only update AC if this is an AC update, otherwise preserve existing
+                            # Fetch latest AC from Jira API (webhook may not carry new value)
+                            acceptance_criteria_raw = None
+                            latest_ac_text = None
+                            try:
+                                api_url = f"{jira_base_url}/rest/api/3/issue/{jira_key}"
+                                auth = (jira_credentials.get('email'), jira_credentials.get('token'))
+                                api_resp = requests.get(api_url, auth=auth, timeout=10)
+                                if api_resp.status_code == 200:
+                                    fresh_issue = api_resp.json()
+                                    fresh_fields = fresh_issue.get('fields', {})
+                                    acceptance_criteria_raw = fresh_fields.get(ACCEPTANCE_CRITERIA_FIELD)
+                                    # refresh attachments for ADF parsing
+                                    jira_attachments = fresh_fields.get("attachment", [])
+                                    print(f"Fetched fresh AC from API: {type(acceptance_criteria_raw).__name__}")
+                                else:
+                                    print(f"Failed to fetch from Jira API: {api_resp.status_code}")
+                                    acceptance_criteria_raw = fields.get(ACCEPTANCE_CRITERIA_FIELD)
+                            except Exception as e:
+                                print(f"Error fetching from Jira API: {e}")
+                                acceptance_criteria_raw = fields.get(ACCEPTANCE_CRITERIA_FIELD)
+
+                            if acceptance_criteria_raw:
+                                if isinstance(acceptance_criteria_raw, dict):
+                                    print(f"Parsing AC as ADF format...")
+                                    latest_ac_text = parse_jira_adf_to_text(acceptance_criteria_raw, user_mapping, jira_base_url, jira_attachments, jira_credentials)
+                                    print(f"Parsed AC length: {len(latest_ac_text) if latest_ac_text else 0}")
+                                else:
+                                    latest_ac_text = str(acceptance_criteria_raw)
+                                    print(f"Using AC as plain text, length: {len(latest_ac_text) if latest_ac_text else 0}")
+
+                            def _strip_ac(section: str):
+                                if not section:
+                                    return ""
+                                header = "## 🎯 Acceptance Criteria"
+                                if section.startswith(header):
+                                    remainder = section[len(header):].lstrip()
+                                    return remainder
+                                return section
+
+                            ac_changed = False
+                            existing_ac_body = _strip_ac(existing_ac_section)
+                            if latest_ac_text is not None:
+                                if existing_ac_body.strip() != latest_ac_text.strip():
+                                    ac_changed = True
+                                    print("Detected AC change vs GitHub body; will update")
+
+                            # Build AC section
                             ac_section = ""
-                            if ac_updated:
-                                print(f"AC was updated, fetching new AC from Jira")
-                                # Get acceptance criteria and parse if needed
-                                acceptance_criteria_raw = fields.get("customfield_10074")
-                                acceptance_criteria = None
-                                if acceptance_criteria_raw:
-                                    if isinstance(acceptance_criteria_raw, dict):
-                                        # It's ADF format, need to get attachments and parse
-                                        jira_attachments = fields.get("attachment", [])
-                                        print(f"Parsing AC as ADF format...")
-                                        acceptance_criteria = parse_jira_adf_to_text(acceptance_criteria_raw, user_mapping, jira_base_url, jira_attachments, jira_credentials)
-                                        print(f"Parsed AC: {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
-                                    else:
-                                        # It's plain text
-                                        acceptance_criteria = acceptance_criteria_raw
-                                        print(f"Using AC as plain text: {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
-                                
-                                if acceptance_criteria:
-                                    ac_section = f"\n\n## 🎯 Acceptance Criteria\n{acceptance_criteria}"
-                                    print(f"✓ Built new AC section")
-                                else:
-                                    print("⚠ No AC content found in Jira")
+                            if ac_changed:
+                                ac_section = f"\n\n## 🎯 Acceptance Criteria\n{latest_ac_text}"
+                                print(f"✓ Built new AC section")
+                            elif existing_ac_section:
+                                ac_section = "\n\n" + existing_ac_section
+                                print(f"Preserving existing AC section")
                             else:
-                                # Preserve existing AC section
-                                if existing_ac_section:
-                                    ac_section = "\n\n" + existing_ac_section
-                                    print(f"Preserving existing AC section")
-                                else:
-                                    print("No existing AC section to preserve")
+                                print("No AC to include")
                             
                             # Get reporter and assignee info (using credentials already set above)
                             reporter = fields.get("reporter")
@@ -1568,7 +1626,7 @@ def lambda_handler(event, context):
 - {assignee_section}
 - **Priority**: {priority}"""
                             
-                            # Rebuild full body (ac_section is already built above based on ac_updated flag)
+                            # Rebuild full body with AC appended
                             new_body = description_section + "\n\n" + jira_details_section + ac_section
                             
                             # Update GitHub issue
@@ -1658,13 +1716,14 @@ def lambda_handler(event, context):
     acceptance_criteria_raw = None
     
     print(f"DEBUG AC: Checking for Acceptance Criteria...")
+    print(f"DEBUG AC: Configured AC field: {ACCEPTANCE_CRITERIA_FIELD}")
     print(f"DEBUG AC: Epic Link field: {fields.get('customfield_10014')}")  # Common epic link field
     print(f"DEBUG AC: Parent field: {fields.get('parent')}")
     
-    # First, check the known AC field for this Jira instance
-    if fields.get("customfield_10074"):
-        acceptance_criteria_raw = fields.get("customfield_10074")
-        print(f"Found Acceptance Criteria in customfield_10074")
+    # First, check the configured AC field for this Jira instance
+    if fields.get(ACCEPTANCE_CRITERIA_FIELD):
+        acceptance_criteria_raw = fields.get(ACCEPTANCE_CRITERIA_FIELD)
+        print(f"Found Acceptance Criteria in {ACCEPTANCE_CRITERIA_FIELD}")
         print(f"AC Raw Type: {type(acceptance_criteria_raw).__name__}")
         print(f"AC Raw Value (first 200 chars): {str(acceptance_criteria_raw)[:200]}")
         
@@ -1680,8 +1739,8 @@ def lambda_handler(event, context):
             acceptance_criteria = acceptance_criteria_raw
             print(f"AC Text (first 200 chars): {acceptance_criteria[:200] if acceptance_criteria else 'None'}")
     else:
-        print(f"DEBUG AC: customfield_10074 not found or empty")
-        print(f"DEBUG AC: customfield_10074 value: {fields.get('customfield_10074')}")
+        print(f"DEBUG AC: {ACCEPTANCE_CRITERIA_FIELD} not found or empty")
+        print(f"DEBUG AC: {ACCEPTANCE_CRITERIA_FIELD} value: {fields.get(ACCEPTANCE_CRITERIA_FIELD)}")
         
         # If AC is empty and there's a parent/epic, fetch from Jira API directly
         has_parent = fields.get('parent') or fields.get('customfield_10014')
@@ -1694,7 +1753,7 @@ def lambda_handler(event, context):
                 if resp.status_code == 200:
                     full_issue = resp.json()
                     full_fields = full_issue.get('fields', {})
-                    acceptance_criteria_raw = full_fields.get('customfield_10074')
+                    acceptance_criteria_raw = full_fields.get(ACCEPTANCE_CRITERIA_FIELD)
                     if acceptance_criteria_raw:
                         print(f"DEBUG AC: Found AC in API response!")
                         if isinstance(acceptance_criteria_raw, dict):
@@ -1718,12 +1777,11 @@ def lambda_handler(event, context):
             # Check if field name or key contains 'acceptance' or 'criteria'
             if ("acceptance" in field_key_lower or 
                 "criteria" in field_key_lower or
-                field_key in ["customfield_10000", "customfield_10001", "customfield_10002", 
+                field_key in [ACCEPTANCE_CRITERIA_FIELD, "customfield_10000", "customfield_10001", "customfield_10002", 
                              "customfield_10003", "customfield_10004", "customfield_10005",
                              "customfield_10010", "customfield_10011", "customfield_10012",
                              "customfield_10015", "customfield_10016", "customfield_10017",
-                             "customfield_10020", "customfield_10021", "customfield_10022",
-                             "customfield_10074"]):
+                             "customfield_10020", "customfield_10021", "customfield_10022"]):
                 if field_value and isinstance(field_value, str) and field_value.strip():
                     acceptance_criteria = field_value
                     print(f"Found Acceptance Criteria in field '{field_key}': {acceptance_criteria[:50]}...")
@@ -1779,8 +1837,10 @@ def lambda_handler(event, context):
 - **Reporter:** {reporter_name}
 - {assignee_section}
 - **Priority**: {priority}
-{ac_section}
 """
+    
+    # Append AC section if present
+    github_body += ac_section
 
     github_labels = map_labels(labels)
 

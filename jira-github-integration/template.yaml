@@ -39,6 +39,7 @@ Resources:
           SECRET_NAME: jira-github-integration
           DYNAMODB_TABLE: jira-github-sync-state
           USER_MAPPING: "nuwanthapiumal57@gmail.com:NuwanthaPiumal,712020:8dcd81ff-57c6-432c-88aa-bded8d0e6c10:Nuwantha57"  # Format: email:github_user OR accountId:github_user (comma-separated)
+          ACCEPTANCE_CRITERIA_FIELD: "customfield_10074"  # Your Jira custom field ID for Acceptance Criteria - find yours using CUSTOM_FIELD_SETUP.md
       Policies:
         - AWSSecretsManagerGetSecretValuePolicy:
             SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*

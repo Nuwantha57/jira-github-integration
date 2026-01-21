@@ -59,7 +59,21 @@ Environment:
     JIRA_BASE_URL: https://your-domain.atlassian.net  # YOUR JIRA URL
     JIRA_EMAIL: your-email@example.com        # YOUR JIRA EMAIL
     USER_MAPPING: "email@example.com:githubuser"  # YOUR USER MAPPINGS
+    ACCEPTANCE_CRITERIA_FIELD: "customfield_10074"  # YOUR CUSTOM FIELD ID
 ```
+
+**IMPORTANT:** Find your Acceptance Criteria field ID:
+
+```bash
+# Find your custom field ID
+curl -u "YOUR_EMAIL:YOUR_JIRA_TOKEN" \
+  "https://YOUR_DOMAIN.atlassian.net/rest/api/3/field" \
+  | jq '.[] | select(.custom==true and (.name | contains("Acceptance"))) | {id, name}'
+```
+
+Copy the `id` value (e.g., `customfield_10034`) and use it for `ACCEPTANCE_CRITERIA_FIELD`.
+
+**If you skip this step**, Acceptance Criteria will not sync! See [CUSTOM_FIELD_SETUP.md](CUSTOM_FIELD_SETUP.md) for details.
 
 ### 1.3 Update samconfig.toml
 

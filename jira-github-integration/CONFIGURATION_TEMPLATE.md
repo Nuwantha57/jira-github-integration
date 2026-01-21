@@ -65,6 +65,18 @@ Use this template to document your specific deployment configuration. Fill in th
 | **Sync Direction** | `☑ Jira → GitHub only` |
 | **Comment Sync** | `☑ Enabled (Jira → GitHub)  ☐ Disabled` |
 | **User Mapping Enabled** | `☐ Yes  ☐ No` |
+| **Acceptance Criteria Field ID** | `customfield_______` |
+
+### Finding Your Acceptance Criteria Field ID
+
+```bash
+# Run this command to find your Jira custom field IDs:
+curl -u "YOUR_JIRA_EMAIL:YOUR_API_TOKEN" \
+  "https://YOUR_DOMAIN.atlassian.net/rest/api/3/field" \
+  | jq '.[] | select(.custom==true and (.name | contains("Acceptance"))) | {id, name}'
+```
+
+**See [CUSTOM_FIELD_SETUP.md](CUSTOM_FIELD_SETUP.md) for detailed instructions.**
 
 ---
 

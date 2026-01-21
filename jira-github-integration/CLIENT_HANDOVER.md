@@ -46,6 +46,40 @@ This package contains a complete, production-ready serverless application that s
 
 ---
 
+## Important Client-Specific Configuration
+
+### ⚠️ Critical: Custom Field Configuration
+
+**The Acceptance Criteria field ID is unique to each Jira instance.** The default value (`customfield_10074`) is from the original Jira account and **will NOT work** on your Jira instance.
+
+**You MUST configure your specific field ID:**
+
+1. **Find your custom field ID:**
+   ```bash
+   curl -u "YOUR_JIRA_EMAIL:YOUR_TOKEN" \
+     "https://YOUR_DOMAIN.atlassian.net/rest/api/3/field" \
+     | jq '.[] | select(.custom==true) | {id, name}'
+   ```
+
+2. **Look for "Acceptance Criteria"** in the output and copy the `id` value
+
+3. **Update template.yaml:**
+   ```yaml
+   ACCEPTANCE_CRITERIA_FIELD: "customfield_XXXXX"  # Your field ID here
+   ```
+
+4. **Redeploy:**
+   ```bash
+   sam build --use-container
+   sam deploy
+   ```
+
+**Documentation:** See [CUSTOM_FIELD_SETUP.md](CUSTOM_FIELD_SETUP.md) for detailed instructions.
+
+**Troubleshooting:** If Acceptance Criteria doesn't appear in GitHub issues, this is likely the cause. Check CloudWatch logs for messages about the configured field.
+
+---
+
 ## Getting Started (3 Steps)
 
 ### Step 1: Prerequisites (30 minutes)

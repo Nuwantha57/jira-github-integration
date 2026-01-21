@@ -9,10 +9,11 @@ Serverless integration that automatically syncs Jira issues and comments to GitH
 **New to this project?** Start here:
 1. � **[INDEX.md](INDEX.md)** - Complete documentation index (START HERE!)
 2. 📖 **[QUICKSTART.md](QUICKSTART.md)** - 5-minute setup guide
-3. 📚 **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Complete 50-page reference
-4. 🐛 **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Solutions to 50+ common issues
-5. 📋 **[CONFIGURATION_TEMPLATE.md](CONFIGURATION_TEMPLATE.md)** - Document your deployment
-6. 🎁 **[CLIENT_HANDOVER.md](CLIENT_HANDOVER.md)** - Executive summary & overview
+3. ⚙️ **[CUSTOM_FIELD_SETUP.md](CUSTOM_FIELD_SETUP.md)** - Find your Acceptance Criteria field ID
+4. 📚 **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)** - Complete 50-page reference
+5. 🐛 **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Solutions to 50+ common issues
+6. 📋 **[CONFIGURATION_TEMPLATE.md](CONFIGURATION_TEMPLATE.md)** - Document your deployment
+7. 🎁 **[CLIENT_HANDOVER.md](CLIENT_HANDOVER.md)** - Executive summary & overview
 
 **Total Documentation:** 100+ pages covering every aspect of deployment and operation.
 

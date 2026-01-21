@@ -214,17 +214,18 @@ jira-github-integration/
 
 Create a configuration worksheet with the following information:
 
-| Parameter                   | Example                             | Your Value |
-| --------------------------- | ----------------------------------- | ---------- |
-| **GitHub Owner**      | `mycompany` or `myusername`     |            |
-| **GitHub Repository** | `project-issues`                  |            |
-| **GitHub Token**      | `ghp_xxxxxxxxxxxx`                |            |
-| **Jira Base URL**     | `https://mycompany.atlassian.net` |            |
-| **Jira Email**        | `admin@mycompany.com`             |            |
-| **Jira API Token**    | `ATATT3xFfGF0xxxx`                |            |
-| **Jira Project Key**  | `PROJ`                            |            |
-| **AWS Region**        | `us-east-1`                       |            |
-| **Stack Name**        | `jira-github-integration`         |            |
+| Parameter                              | Example                             | Your Value |
+| -------------------------------------- | ----------------------------------- | ---------- |
+| **GitHub Owner**                 | `mycompany` or `myusername`     |            |
+| **GitHub Repository**            | `project-issues`                  |            |
+| **GitHub Token**                 | `ghp_xxxxxxxxxxxx`                |            |
+| **Jira Base URL**                | `https://mycompany.atlassian.net` |            |
+| **Jira Email**                   | `admin@mycompany.com`             |            |
+| **Jira API Token**               | `ATATT3xFfGF0xxxx`                |            |
+| **Jira Project Key**             | `PROJ`                            |            |
+| **AWS Region**                   | `us-east-1`                       |            |
+| **Stack Name**                   | `jira-github-integration`         |            |
+| **Acceptance Criteria Field ID** | `customfield_10034`               |            |
 
 **User Mapping (Optional but Recommended):**
 Map Jira users to GitHub usernames for proper assignee attribution:
@@ -235,6 +236,29 @@ Map Jira users to GitHub usernames for proper assignee attribution:
 | `jane.smith@company.com` | `janesmith`   |
 
 Format: `email1:githubuser1,email2:githubuser2`
+
+### Step 6: Find Your Jira Custom Field IDs
+
+**CRITICAL:** The Acceptance Criteria field ID is unique to your Jira instance. You must find your specific field ID.
+
+**Quick Method - Using Jira REST API:**
+
+```bash
+# Find all custom fields in your Jira
+curl -u "YOUR_JIRA_EMAIL:YOUR_JIRA_TOKEN" \
+  "https://YOUR_DOMAIN.atlassian.net/rest/api/3/field" \
+  | jq '.[] | select(.custom==true) | {id, name}'
+```
+
+Look for a field named "Acceptance Criteria" or similar and note its `id` value (e.g., `customfield_10034`).
+
+**Alternative Methods:**
+
+- See [CUSTOM_FIELD_SETUP.md](CUSTOM_FIELD_SETUP.md) for detailed instructions
+- Use browser DevTools to inspect Jira issue API responses
+- Check an issue JSON that has Acceptance Criteria filled in
+
+**Important:** If you don't configure the correct field ID, Acceptance Criteria will not sync to GitHub.
 
 ---
 
