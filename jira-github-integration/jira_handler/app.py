@@ -1143,6 +1143,10 @@ def lambda_handler(event, context):
         # Check if description or labels were updated
         if changelog:
             items = changelog.get("items", [])
+            
+            # Log all changelog items for debugging
+            print(f"Changelog items: {[(item.get('field'), item.get('fieldId')) for item in items]}")
+            
             description_updated = any(item.get("field") == "description" for item in items)
             labels_updated = any(item.get("field") == "labels" for item in items)
             summary_updated = any(item.get("field") == "summary" for item in items)
@@ -1621,10 +1625,10 @@ def lambda_handler(event, context):
                             
                             # Rebuild Jira Details section
                             jira_details_section = f"""### 📌 Jira Details
-- **Issue**: [{jira_key}]({jira_url})
+- **Issue Key:** [{jira_key}]({jira_url})
+- **Priority:** {priority}
 - **Reporter:** {reporter_name}
-- {assignee_section}
-- **Priority**: {priority}"""
+- {assignee_section}"""
                             
                             # Rebuild full body with AC appended
                             new_body = description_section + "\n\n" + jira_details_section + ac_section
