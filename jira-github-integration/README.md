@@ -154,11 +154,7 @@ unzip jira-github-integration.zip
 cd jira-github-integration
 ```
 
-### Step 2: Verify Project Structure
-
-Ensure your project has the following structure:ra-github-integration/
-
-### Step 3: Generate GitHub Personal Access Token
+### Step 2: Generate GitHub Personal Access Token
 
 1. Log in to GitHub
 2. Navigate to **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
@@ -172,7 +168,7 @@ Ensure your project has the following structure:ra-github-integration/
 8. **IMPORTANT:** Copy the token immediately (you won't see it again!)
 9. Save it securely (you'll need it in Step 5)
 
-### Step 4: Generate Jira API Token
+### Step 3: Generate Jira API Token
 
 1. Log in to Jira (https://your-domain.atlassian.net)
 2. Click your profile picture → **Account settings**
@@ -183,7 +179,7 @@ Ensure your project has the following structure:ra-github-integration/
 7. **Copy the token** immediately
 8. Save it securely (you'll need it in Step 5)
 
-### Step 5: Gather Configuration Information
+### Step 4: Gather Configuration Information
 
 Create a configuration worksheet with the following information:
 
@@ -210,7 +206,7 @@ Map Jira users to GitHub usernames for proper assignee attribution:
 
 Format: `email1:githubuser1,email2:githubuser2`
 
-### Step 6: Find Your Jira Custom Field IDs
+### Step 5: Find Your Jira Custom Field IDs
 
 **CRITICAL:** The Acceptance Criteria field ID is unique to your Jira instance. You must find your specific field ID.
 
@@ -806,39 +802,6 @@ Webhook signature verification is currently optional. If you want to add it:
            "webhook_secret":"YOUR_GENERATED_SECRET"
        }'
    ```
-
----
-
-### Common Commands Reference
-
-```bash
-# Build and deploy
-sam build --use-container && sam deploy
-
-# View logs (real-time)
-sam logs --stack-name jira-github-integration --tail
-
-# View specific log stream
-sam logs --stack-name jira-github-integration --name JiraWebhookFunction --tail
-
-# Test locally
-sam local invoke JiraWebhookFunction --event events/event.json
-
-# Start local API
-sam local start-api
-
-# Validate template
-sam validate
-
-# Delete stack
-sam delete --stack-name jira-github-integration
-
-# Get stack outputs
-aws cloudformation describe-stacks \
-    --stack-name jira-github-integration \
-    --query 'Stacks[0].Outputs' \
-    --region YOUR_AWS_REGION
-```
 
 ---
 
