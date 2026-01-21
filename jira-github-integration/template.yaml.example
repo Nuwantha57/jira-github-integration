@@ -1,0 +1,149 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  Jira-GitHub Integration
+  
+  One-way integration that syncs Jira issues and comments to GitHub (Jira → GitHub only).
+  
+  BEFORE DEPLOYMENT:
+  1. Replace all placeholder values below with your actual configuration
+  2. Create AWS Secrets Manager secret with github_token and jira_api_token
+  3. Configure user mappings for proper assignee sync
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 30
+    MemorySize: 256
+
+Resources:
+  # DynamoDB Table for duplicate prevention and comment mapping
+  JiraGithubSyncTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: jira-github-sync-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: jira_issue_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: jira_issue_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  JiraWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: jira_handler/
+      Handler: app.lambda_handler
+      Environment:
+        Variables:
+          # ==========================================
+          # GITHUB CONFIGURATION - REPLACE THESE VALUES
+          # ==========================================
+          GITHUB_OWNER: YOUR_GITHUB_USERNAME_OR_ORG       # e.g., "mycompany" or "johndoe"
+          GITHUB_REPO: YOUR_REPOSITORY_NAME                # e.g., "project-issues"
+          
+          # ==========================================
+          # JIRA CONFIGURATION - REPLACE THESE VALUES
+          # ==========================================
+          JIRA_BASE_URL: https://YOUR_DOMAIN.atlassian.net  # e.g., "https://mycompany.atlassian.net"
+          JIRA_EMAIL: YOUR_JIRA_EMAIL                       # e.g., "admin@mycompany.com"
+          
+          # ==========================================
+          # INTEGRATION SETTINGS (Optional)
+          # ==========================================
+          TARGET_LABEL: sync-to-github                      # Jira label that triggers sync
+          
+          # ==========================================
+          # CUSTOM FIELD CONFIGURATION
+          # ==========================================
+          # IMPORTANT: Acceptance Criteria field ID is unique to each Jira instance
+          # Find your field ID using CUSTOM_FIELD_SETUP.md guide
+          ACCEPTANCE_CRITERIA_FIELD: "customfield_10074"    # Your Jira AC field ID
+          
+          # ==========================================
+          # AWS RESOURCES (Keep defaults unless customizing)
+          # ==========================================
+          SECRET_NAME: jira-github-integration              # AWS Secrets Manager secret name
+          DYNAMODB_TABLE: jira-github-sync-state            # DynamoDB table name
+          
+          # ==========================================
+          # USER MAPPING - CRITICAL FOR ASSIGNEE SYNC
+          # ==========================================
+          # Format: "jira_email1:github_username1,jira_email2:github_username2"
+          # Example: "john.doe@company.com:johndoe,jane.smith@company.com:janesmith"
+          # Leave empty if not using user mapping
+          USER_MAPPING: ""  # REPLACE WITH YOUR USER MAPPINGS
+          
+          # Alternative format using Jira Account IDs:
+          # "712020:8dcd81ff-57c6-432c-88aa-bded8d0e6c10:GithubUsername"
+          
+      Policies:
+        - AWSSecretsManagerGetSecretValuePolicy:
+            SecretArn: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:jira-github-integration*
+        - DynamoDBCrudPolicy:
+            TableName: !Ref JiraGithubSyncTable
+      Events:
+        JiraWebhook:
+          Type: Api
+          Properties:
+            Path: /webhook
+            Method: post
+
+Outputs:
+  JiraWebhookUrl:
+    Description: "API Gateway endpoint URL for Jira webhook - Configure this in Jira webhooks settings"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/webhook"
+    Export:
+      Name: !Sub "${AWS::StackName}-WebhookUrl"
+  
+  DynamoDBTableName:
+    Description: "DynamoDB table name for sync state"
+    Value: !Ref JiraGithubSyncTable
+    Export:
+      Name: !Sub "${AWS::StackName}-TableName"
+  
+  LambdaFunctionArn:
+    Description: "Lambda function ARN"
+    Value: !GetAtt JiraWebhookFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-FunctionArn"
+
+# ==========================================
+# DEPLOYMENT INSTRUCTIONS
+# ==========================================
+# 
+# 1. COPY THIS FILE:
+#    Copy template.yaml.example to template.yaml
+#    cp template.yaml.example template.yaml
+#
+# 2. UPDATE CONFIGURATION:
+#    Edit template.yaml and replace all "YOUR_*" placeholders above
+#
+# 3. CREATE AWS SECRET:
+#    aws secretsmanager create-secret \
+#        --name jira-github-integration \
+#        --secret-string '{"github_token":"YOUR_GITHUB_TOKEN","jira_api_token":"YOUR_JIRA_TOKEN"}' \
+#        --region YOUR_AWS_REGION
+#
+# 4. BUILD:
+#    sam build --use-container
+#
+# 5. DEPLOY:
+#    sam deploy --guided
+#
+# 6. CONFIGURE JIRA WEBHOOK:
+#    Use the JiraWebhookUrl from the deployment output
+#    Settings → System → WebHooks → Create WebHook
+#    Events: Issue created, Issue updated, Comment created
+#
+# 7. TEST:
+#    Create a Jira issue with label "sync-to-github"
+#    Verify GitHub issue is created
+#
+# For detailed instructions, see DEPLOYMENT_GUIDE.md
+# ==========================================
