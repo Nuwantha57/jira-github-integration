@@ -1,5 +1,7 @@
 # Jira-GitHub Integration - Complete Deployment Guide
 
+## Repository Link: https://github.com/Nuwantha57/jira-github-integration/tree/main/jira-github-integration
+
 ## Table of Contents
 
 1. [Overview](#overview)
