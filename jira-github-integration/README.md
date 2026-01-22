@@ -230,6 +230,43 @@ Look for a field named "Acceptance Criteria" or similar and note its `id` value 
 
 ### Step 1: Configure AWS CLI
 
+Create IAM User and Get AWS Credentials
+
+**Important:** You need to create an **IAM user** explicitly to get Access Key ID and Secret Access Key. AWS root account credentials are not recommended for deployments.
+
+##### Create IAM User in AWS Console
+
+1. **Log in to AWS Console**
+   * Go to [https://console.aws.amazon.com/](https://console.aws.amazon.com/)
+   * Sign in with your AWS account (root account)
+2. **Navigate to IAM**
+   * Search for "IAM" in the AWS console search bar
+   * Click on "Identity and Access Management (IAM)"
+3. **Create New User**
+   * In the left sidebar, click **Users**
+   * Click **Create user** button
+   * Enter username: `jira-github-deployer` (or any name you prefer)
+   * Click **Next**
+4. **Set Permissions**
+   * Select **Attach policies directly**
+   * Search for and select these policies:
+     * `AWSLambdaFullAccess` - For Lambda management
+     * `AmazonAPIGatewayAdministrator` - For API Gateway
+     * `IAMFullAccess` - For IAM role creation
+     * `CloudFormationFullAccess` - For CloudFormation stack management
+   * Click **Next** → **Create user**
+5. **Generate Access Keys**
+   * Click on the newly created user from the Users list
+   * Click **Security credentials** tab
+   * Under  **Access keys** , click **Create access key**
+   * Select **Command Line Interface (CLI)**
+   * Check "I understand..." checkbox
+   * Click **Next**
+   * Copy and **save securely** your:
+     * **Access Key ID** (starts with `AKIA...`)
+     * **Secret Access Key** (long random string - only shown once!)
+   * ⚠️ **Keep these secret!** Anyone with these keys can access your AWS account
+
 ```bash
 # Configure AWS credentials
 aws configure
@@ -604,7 +641,6 @@ sam logs --stack-name jira-github-integration --tail
 # Or view in AWS Console
 # Navigate to CloudWatch → Log Groups → /aws/lambda/jira-github-integration-JiraWebhookFunction-xxxxx
 ```
-
 
 ---
 
